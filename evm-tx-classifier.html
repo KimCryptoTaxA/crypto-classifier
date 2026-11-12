@@ -1,0 +1,951 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crypto Transaction Classifier</title>
+<script src="webapp-bridge.js?v=1"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="classifier-chains.js?v=7"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1280px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--mute);margin:0 0 18px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:860px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h2{font-size:15px;margin:0 0 10px}
+label{display:block;font-weight:600;margin:10px 0 4px}
+.hint{color:var(--mute);font-size:12px;font-weight:400}
+textarea,input[type=text],input[type=password],input[type=number],input[type=date],select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.chains{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px}
+.chains label{font-weight:400;margin:0;display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:7px}
+.chains small{color:var(--mute);display:block}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+.row>div{flex:1;min-width:140px}
+.check{display:flex;gap:8px;align-items:center;font-weight:400;margin-top:10px}
+button{font:inherit;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--acc);background:var(--acc);color:var(--accInk);cursor:pointer}
+button.sec{background:transparent;color:var(--acc)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+#log{font-family:ui-monospace,Menlo,monospace;font-size:12px;max-height:200px;overflow:auto;white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;margin:0}
+.e{color:var(--bad)}.w{color:var(--warn)}.g{color:var(--ok)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{background:var(--chip);border-radius:20px;padding:3px 10px;font-size:12px;cursor:pointer;border:1px solid transparent}
+.chip.on{border-color:var(--acc)}
+.tablewrap{overflow:auto;max-height:600px;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;font-size:12px;min-width:1500px;width:100%}
+th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{position:sticky;top:0;background:var(--card);z-index:1}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+td.cm{max-width:420px}
+tr.spam td{color:var(--mute)}
+a{color:var(--acc)}
+.group{margin:10px 0 4px;font-size:12px;font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;display:flex;gap:10px;align-items:center}
+.group a{font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer}
+.scanaddr{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0}
+.scanaddr h3{font-size:13px;margin:0 0 6px;word-break:break-all}
+.scanaddr .fam{color:var(--mute);font-weight:400}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pill{display:flex;gap:6px;align-items:center;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);font-weight:400;margin:0}
+.pill.on{border-color:var(--ok)}.pill.off{opacity:.55}.pill.err{border-color:var(--bad)}.pill.key{border-color:var(--warn)}
+code{font-size:12px}
+</style>
+</head>
+<body>
+<main>
+<h1>Crypto Transaction Classifier</h1>
+<p class="sub">Checks which blockchains your wallets are active on, pulls their history live from block explorers, classifies each transaction (DeFi, swap, NFT, bridge, staking, transfer, scam/spam), and exports a CoinTracking-style Excel file.</p>
+
+<div class="grid">
+  <section class="card">
+    <h2>1. Wallets</h2>
+    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge). Numbered _1, _2 … in this order.</span></label>
+    <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
+    <div class="row">
+      <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
+      <div><label>To date <span class="hint">(optional)</span></label><input type="date" id="dTo"></div>
+      <div><label>Max pages per list</label><input type="number" id="maxPages" value="40" min="1" max="500"></div>
+    </div>
+    <label class="check"><input type="checkbox" id="utc" checked> Show dates in UTC (untick for your local time zone)</label>
+    <label class="check"><input type="checkbox" id="exSpam"> Leave "Scam/Spam" rows out of the Excel file <span class="hint">("Possible Spam (review)" rows are always kept)</span></label>
+  </section>
+
+  <section class="card">
+    <h2>2. Blockchains &amp; explorers to check</h2>
+    <div id="chainList"></div>
+    <div class="group">Bridge / NFT / DeFi explorers <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">— add detail to matching transactions</span></div>
+    <div class="chains" id="explorerList"></div>
+    <label>Custom Blockscout explorers <span class="hint">— one per line: CODE, https://explorer-url, NATIVE_SYMBOL</span></label>
+    <textarea id="custom" style="min-height:54px" placeholder="KAVA, https://kavascan.com, KAVA"></textarea>
+  </section>
+
+  <section class="card">
+    <h2>3. API keys <span class="hint">(optional — each unlocks specific chains/explorers)</span></h2>
+    <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
+    <input type="password" id="heliusKey" autocomplete="off">
+    <div class="row">
+      <div><label>OpenSea API key <span class="hint">— free; NFT sales</span></label><input type="password" id="openseaKey" autocomplete="off"></div>
+      <div><label>Zerion API key <span class="hint">— free dev key; DeFi labels</span></label><input type="password" id="zerionKey" autocomplete="off"></div>
+    </div>
+    <label>CSPR.cloud access token <span class="hint">— free (request at cspr.cloud); needed for Casper, uses the helper</span></label>
+    <input type="password" id="csprKey" autocomplete="off">
+    <label>Blockscout PRO API key <span class="hint">— free at dev.blockscout.com; one key for 120+ chains, faster and fewer rate limits</span></label>
+    <input type="password" id="bsKey" autocomplete="off">
+    <label>Etherscan API V2 key <span class="hint">— Linea works on the free plan; BNB Chain &amp; Gnosis need a paid plan</span></label>
+    <input type="password" id="esKey" autocomplete="off">
+    <label>DeBank Cloud AccessKey <span class="hint">— pay-per-use; used for BNB Chain/Gnosis/Linea when Etherscan can't</span></label>
+    <input type="password" id="dbKey" autocomplete="off">
+    <label class="check"><input type="checkbox" id="remember"> Remember keys in this browser</label>
+    <p class="hint">Each key is sent only to its own service (helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Bitcoin xpub/zpub and Cardano need the local helper: run <code>python3 start-classifier.py</code>.</p>
+    <button type="button" class="sec" id="testBs" style="margin-top:8px">Test Blockscout key</button> <span id="testBsOut" class="hint"></span>
+  </section>
+
+  <section class="card">
+    <h2>Progress</h2>
+    <pre id="log">Ready.</pre>
+  </section>
+</div>
+
+<div class="actions">
+  <button id="scan">① Scan: where are these wallets active?</button>
+  <button id="run" disabled>② Fetch &amp; classify ticked</button>
+  <button id="stop" class="sec" disabled>Stop</button>
+  <button id="xlsx" class="sec" disabled>Download Excel (.xlsx)</button>
+</div>
+
+<section class="card" id="scanCard" hidden>
+  <h2>Scan results <span class="hint">— ticked = will be fetched. ✓ active · — no activity · ⚠ error · 🔑 needs key</span></h2>
+  <div id="scanOut"></div>
+</section>
+
+<section class="card" id="results" hidden>
+  <h2 id="resTitle">Results</h2>
+  <div class="chips" id="catChips"></div>
+  <div class="chips" id="walletChips"></div>
+  <div class="tablewrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+  <p class="hint" id="tableNote"></p>
+</section>
+</main>
+
+<script>
+/* ---------------- Config ---------------- */
+const CHAINS = [
+  {id:'eth',    name:'Ethereum',         code:'ETH',    native:'ETH',  src:'blockscout', chainid:1,      url:'https://eth.blockscout.com',      def:true},
+  {id:'base',   name:'Base',             code:'BASE',   native:'ETH',  src:'blockscout', chainid:8453,   url:'https://base.blockscout.com',     def:true},
+  {id:'op',     name:'Optimism',         code:'OP',     native:'ETH',  src:'blockscout', chainid:10,     url:'https://explorer.optimism.io',    def:true},
+  {id:'arb',    name:'Arbitrum One',     code:'ARB',    native:'ETH',  src:'blockscout', chainid:42161,  url:'https://arbitrum.blockscout.com', def:true},
+  {id:'pol',    name:'Polygon PoS',      code:'POL',    native:'POL',  src:'blockscout', chainid:137,    url:'https://polygon.blockscout.com',  def:true},
+  {id:'zksync', name:'zkSync Era',       code:'ZKSYNC', native:'ETH',  src:'blockscout', chainid:324,    url:'https://zksync.blockscout.com',   def:true},
+  {id:'scroll', name:'Scroll',           code:'SCR',    native:'ETH',  src:'blockscout', chainid:534352, url:'https://scrollscan.com',          def:true},
+  {id:'avax',   name:'Avalanche C-Chain',code:'AVAX',   native:'AVAX', src:'routescan',  chainid:43114, explorer:'https://snowtrace.io', def:true},
+  {id:'bsc',    name:'BNB Chain',        code:'BSC',    native:'BNB',  src:'keyed', chainid:56,    debank:'bsc',   explorer:'https://bscscan.com'},
+  {id:'gno',    name:'Gnosis',           code:'GNO',    native:'XDAI', src:'keyed', chainid:100,   debank:'xdai',  explorer:'https://gnosisscan.io'},
+  {id:'linea',  name:'Linea',            code:'LINEA',  native:'ETH',  src:'keyed', chainid:59144, debank:'linea', explorer:'https://lineascan.build'},
+  {id:'mode',   name:'Mode',             code:'MODE',   native:'ETH',  src:'blockscout', chainid:34443,  url:'https://explorer.mode.network',  def:true},
+  {id:'celo',   name:'Celo',             code:'CELO',   native:'CELO', src:'blockscout', chainid:42220,  url:'https://celo.blockscout.com',    def:true},
+  {id:'ink',    name:'Ink',              code:'INK',    native:'ETH',  src:'blockscout', chainid:57073,  url:'https://explorer.inkonchain.com', def:true},
+  {id:'uni',    name:'Unichain',         code:'UNI',    native:'ETH',  src:'blockscout', chainid:130,    url:'https://unichain.blockscout.com', def:true},
+  {id:'soneium',name:'Soneium',          code:'SONEIUM',native:'ETH',  src:'blockscout', chainid:1868,   url:'https://soneium.blockscout.com',  def:true},
+  {id:'lisk',   name:'Lisk',             code:'LISK',   native:'ETH',  src:'blockscout', chainid:1135,   url:'https://blockscout.lisk.com',     def:true},
+  {id:'world',  name:'World Chain',      code:'WLD',    native:'ETH',  src:'blockscout', chainid:480,    url:'https://worldchain-mainnet.explorer.alchemy.com', def:true},
+  {id:'shape',  name:'Shape',            code:'SHAPE',  native:'ETH',  src:'blockscout', chainid:360,    url:'https://shapescan.xyz',           def:true},
+  {id:'rsk',    name:'Rootstock',        code:'RSK',    native:'RBTC', src:'blockscout', chainid:30,     url:'https://rootstock.blockscout.com', def:true},
+  {id:'fuse',   name:'Fuse',             code:'FUSE',   native:'FUSE', src:'blockscout', chainid:122,    url:'https://explorer.fuse.io',        def:true},
+  {id:'mantle', name:'Mantle',           code:'MNT',    native:'MNT',  src:'routescan',  chainid:5000,   explorer:'https://mantlescan.xyz', def:true},
+  {id:'blast',  name:'Blast',            code:'BLAST',  native:'ETH',  src:'routescan',  chainid:81457,  explorer:'https://blastscan.io',   def:true},
+  {id:'metis',  name:'Metis',            code:'METIS',  native:'METIS',src:'routescan',  chainid:1088,   explorer:'https://andromeda-explorer.metis.io', def:true},
+  {id:'xdc',    name:'XDC Network',      code:'XDC',    native:'XDC',  src:'keyed', chainid:50,  debank:'xdc', explorer:'https://xdcscan.com', def:true, label:'needs free Etherscan key'},
+  {id:'filevm', name:'Filecoin EVM',     code:'FILEVM', native:'FIL',  src:'blockscout', chainid:314,  url:'https://filecoin.blockscout.com', def:true},
+  {id:'iotaevm',name:'IOTA EVM',         code:'IOTAEVM',native:'IOTA', src:'blockscout', chainid:8822, url:'https://explorer.evm.iota.org',   def:true},
+].map(c => ({...c, family: 'evm', group: 'EVM chains', txUrl: c.txUrl || (h => (c.explorer || c.url) + '/tx/' + h)}));
+const SRC_LABEL = {blockscout:'Blockscout · free', routescan:'Routescan · free', keyed:'needs Etherscan or DeBank key', gno:'free with Blockscout PRO key, or Etherscan/DeBank key'};
+const ALL_CHAINS = [...CHAINS, ...NONEVM_CHAINS];
+const COLS = ['Type','Category','Buy Currency','Buy Amount','Sell Amount','Sell Currency','Fee Currency','Fee Amount',
+  'Exchange/Wallet Name','Transaction Hash','Liquidity Pool Address','Date','Comments','Chain','Wallet Address','Explorer Link'];
+const ZERO = '0x0000000000000000000000000000000000000000';
+const DEAD = '0x000000000000000000000000000000000000dead';
+
+/* ---------------- Helpers ---------------- */
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const lc = s => (s || '').toString().toLowerCase();
+const short = a => !a ? '' : a.length <= 16 ? a : a.slice(0, 6) + '…' + a.slice(-4);
+let STOP = false;
+function log(msg, cls) {
+  const el = $('log'); const span = document.createElement('span');
+  if (cls) span.className = cls; span.textContent = '\n' + msg; el.appendChild(span); el.scrollTop = el.scrollHeight;
+}
+function units(v, dec) {
+  try {
+    dec = parseInt(dec ?? 18, 10); if (isNaN(dec)) dec = 0;
+    let b = BigInt(String(v || '0').split('.')[0]); const neg = b < 0n; if (neg) b = -b;
+    const s = b.toString().padStart(dec + 1, '0');
+    const i = s.slice(0, s.length - dec), f = s.slice(s.length - dec).replace(/0+$/, '');
+    return Number((neg ? '-' : '') + i + (f ? '.' + f : ''));
+  } catch { return Number(v) || 0; }
+}
+const fmtNum = n => (n === 0 ? '0' : Math.abs(n) >= 1 ? n.toLocaleString('en-US', {maximumFractionDigits: 6}) : n.toPrecision(6).replace(/0+$/, '').replace(/\.$/, ''));
+function fmtDate(d, utc) {
+  const p = x => String(x).padStart(2, '0');
+  const g = utc ? ['getUTCMonth','getUTCDate','getUTCFullYear','getUTCHours','getUTCMinutes','getUTCSeconds'] : ['getMonth','getDate','getFullYear','getHours','getMinutes','getSeconds'];
+  return `${p(d[g[0]]() + 1)}-${p(d[g[1]]())}-${d[g[2]]()} ${p(d[g[3]]())}:${p(d[g[4]]())}:${p(d[g[5]]())}`;
+}
+async function getJSON(url, opts = {}, tries = 5) {
+  for (let i = 0; i < tries; i++) {
+    if (STOP) throw new Error('Stopped');
+    try {
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+      let r; try { r = await fetch(url, {...opts, signal: ctl.signal}); } finally { clearTimeout(timer); }
+      if (r.status === 429 || r.status >= 500) { await sleep(1000 * (i + 1) * 1.5); continue; }
+      if (r.status === 401 || r.status === 403) { const t = await r.text(); throw new Error(`HTTP ${r.status}: ${t.slice(0, 160)}`); }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } catch (e) {
+      if (/HTTP 4|Stopped/.test(e.message) || i === tries - 1) throw e;
+      await sleep(1000 * (i + 1));
+    }
+  }
+  throw new Error('Too many retries: ' + url);
+}
+function bucket(map, hash) {
+  if (!map.has(hash)) map.set(hash, {hash, ts: null, from: '', to: '', toName: '', method: '', ok: true, fee: 0, legs: [], initKnown: false, flags: []});
+  return map.get(hash);
+}
+function natLeg(chain, dir, amount, cp) { return {dir, amount, sym: chain.native, name: chain.native, token: 'native', kind: 'native', id: null, cp: lc(cp), spam: false}; }
+
+/* ---------------- Source: Blockscout v2 ---------------- */
+// With a Blockscout PRO key, use the multichain API (api.blockscout.com) — the key is only ever sent there.
+// Browsers can't call it directly, so requests go through the local helper (start-classifier.py) at /bsproxy.
+const PRO = '/bsproxy';
+let HELPER = null; // true when the page is served by start-classifier.py
+async function helperUp() {
+  if (HELPER !== null) return HELPER;
+  if (!location.protocol.startsWith('http')) return (HELPER = false);
+  try { const r = await fetch('/helper-health'); HELPER = r.ok && (await r.json()).ok === true; } catch { HELPER = false; }
+  return HELPER;
+}
+const NO_HELPER = 'The Blockscout PRO key only works when the app is opened through the helper: run "python3 start-classifier.py" and use the page it opens.';
+const bsKeyVal = () => ($('bsKey')?.value || '').trim();
+async function fetchBlockscout(chain, addr, opt, usePro) {
+  const key = bsKeyVal(), pro = !!(usePro && key && chain.chainid && HELPER);
+  const base = pro ? `${PRO}/${chain.chainid}` : chain.url.replace(/\/$/, ''), a = lc(addr), map = new Map();
+  const bsKey = sep => pro ? `${sep}apikey=${encodeURIComponent(key)}` : '';
+  const legacy = pro ? `${PRO}/v2/api?chain_id=${chain.chainid}&` : `${base}/api?`;
+  let cutoff = null; const cut = d => { if (!cutoff || d > cutoff) cutoff = d; };
+  const paged = async (path) => {
+    const out = []; let params = null;
+    for (let p = 0; p < opt.maxPages; p++) {
+      const q = params ? '?' + new URLSearchParams(params) : '';
+      const j = await getJSON(`${base}/api/v2/addresses/${addr}/${path}${q}${bsKey(q ? '&' : '?')}`);
+      const items = j.items || []; out.push(...items);
+      if (!j.next_page_params || !items.length) break;
+      const last = items[items.length - 1];
+      if (opt.from && last.timestamp && new Date(last.timestamp) < opt.from) break;
+      if (p === opt.maxPages - 1) { cut(new Date(last.timestamp)); break; }
+      params = j.next_page_params; await sleep(120);
+    }
+    return out;
+  };
+  const txs = await paged('transactions');
+  for (const t of txs) {
+    if (!t.timestamp) continue; // pending
+    const b = bucket(map, t.hash);
+    b.ts = new Date(t.timestamp); b.from = lc(t.from?.hash); b.to = lc(t.to?.hash || t.created_contract?.hash);
+    b.toName = t.to?.name || t.to?.metadata?.tags?.find(x => x.name)?.name || t.to?.implementations?.[0]?.name || t.created_contract?.name || '';
+    b.toIsContract = !!t.to?.is_contract; b.method = t.method || ''; b.initKnown = true;
+    b.ok = t.result ? t.result === 'success' : t.status !== 'error';
+    b.txTypes = t.transaction_types || t.tx_types || [];
+    if (t.to?.is_scam || t.from?.is_scam) b.flags.push('explorer flagged address as scam');
+    if (b.from === a) b.fee = units(t.fee?.value || '0', 18);
+    const v = t.value || '0', to = lc(t.to?.hash);
+    if (v !== '0' && b.ok) {
+      if (b.from === a && to !== a) b.legs.push(natLeg(chain, 'out', units(v, 18), to));
+      else if (to === a && b.from !== a) b.legs.push(natLeg(chain, 'in', units(v, 18), b.from));
+    }
+  }
+  if (STOP) throw new Error('Stopped');
+  const tts = await paged('token-transfers');
+  for (const t of tts) {
+    const h = t.transaction_hash || t.tx_hash; if (!h) continue;
+    const b = bucket(map, h);
+    if (!b.ts && t.timestamp) b.ts = new Date(t.timestamp);
+    if (!b.method) b.method = t.method || '';
+    const f = lc(t.from?.hash), to = lc(t.to?.hash); if (f === to) continue;
+    const dir = f === a ? 'out' : to === a ? 'in' : null; if (!dir) continue;
+    const tk = t.token || {}, kind = tk.type || 'ERC-20', tot = t.total || {};
+    const id = tot.token_id ?? t.token_id ?? tot.token_instance?.id ?? null;
+    const amount = kind === 'ERC-721' ? 1 : units(tot.value || '0', tot.decimals ?? tk.decimals ?? (kind === 'ERC-1155' ? 0 : 18));
+    const tAddr = lc(tk.address_hash || tk.address);
+    b.legs.push({dir, amount, sym: tk.symbol || tk.name || short(tAddr), name: tk.name || '', token: tAddr, kind, id,
+      cp: dir === 'out' ? to : f, spam: /scam|spam/i.test(tk.reputation || '') || !!tk.is_scam || !!t.from?.is_scam,
+      priced: tk.exchange_rate != null, fromZero: f === ZERO, toZero: to === ZERO || to === DEAD});
+  }
+  if (STOP) throw new Error('Stopped');
+  // Internal (native) transfers: the legacy Etherscan-style endpoint is much faster than /api/v2 for this list.
+  const its = [];
+  for (let page = 1; page <= opt.maxPages; page++) {
+    let j;
+    try {
+      for (let tries = 0; ; tries++) {
+        j = await getJSON(`${legacy}module=account&action=txlistinternal&address=${addr}&page=${page}&offset=1000&sort=desc${bsKey('&')}`);
+        if (j.status === '0' && /too many|rate limit/i.test(j.message || '')) {
+          if (tries >= 6) throw new Error('rate-limited by Blockscout');
+          await sleep(2000 * (tries + 1)); continue;
+        }
+        if (j.status === '0' && j.result == null && !/no (transactions|records)/i.test(j.message || '')) throw new Error(j.message || 'unknown error');
+        break;
+      }
+    }
+    catch (e) { if (e.message === 'Stopped') throw e; log(`   ⚠ internal transfers unavailable (${e.message.slice(0, 80)}) — native amounts received from contracts may be missing`, 'w'); break; }
+    const res = Array.isArray(j.result) ? j.result : []; its.push(...res);
+    if (res.length < 1000) break;
+    if (page === opt.maxPages) { cut(new Date(+res[res.length - 1].timeStamp * 1000)); break; }
+    if (opt.from && +res[res.length - 1].timeStamp * 1000 < +opt.from) break;
+    await sleep(150);
+  }
+  for (const t of its) {
+    if (t.isError === '1' || t.index === '0') continue;
+    const v = t.value || '0'; if (v === '0') continue;
+    const h = t.transactionHash || t.hash; if (!h) continue;
+    const b = bucket(map, h); if (!b.ts) b.ts = new Date(+t.timeStamp * 1000);
+    const f = lc(t.from), to = lc(t.to); if (f === to) continue;
+    if (f === a) b.legs.push(natLeg(chain, 'out', units(v, 18), to));
+    else if (to === a) b.legs.push(natLeg(chain, 'in', units(v, 18), f));
+  }
+  return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
+}
+function trimToCutoff(list, cutoff) {
+  if (!cutoff) return list;
+  const kept = list.filter(b => b.ts >= cutoff);
+  if (kept.length === list.length) return list;
+  log(`   ⚠ Page limit reached: only transactions from ${fmtDate(cutoff, $('utc').checked)} onward are complete, so ${list.length - kept.length} older ones were left out. Raise "Max pages" (or set a From date) for full history.`, 'w');
+  return kept;
+}
+
+/* ---------------- Source: Etherscan-compatible (Etherscan V2, Routescan) ---------------- */
+async function fetchEtherscanLike(chain, addr, opt, baseUrl, keyQ, label) {
+  const a = lc(addr), map = new Map(), OFF = 1000;
+  let cutoff = null;
+  const paged = async (action, optional) => {
+    const out = []; const maxP = Math.min(opt.maxPages, 10);
+    for (let page = 1; page <= maxP; page++) {
+      const j = await getJSON(`${baseUrl}&module=account&action=${action}&address=${addr}&page=${page}&offset=${OFF}&sort=desc${keyQ}`);
+      if (j.status !== '1') {
+        const msg = typeof j.result === 'string' ? j.result : j.message;
+        if (/no (transactions|records)/i.test(`${j.message} ${msg}`)) break;
+        if (/rate limit/i.test(msg)) { await sleep(1500); page--; continue; }
+        if (optional) { log(`   ⚠ ${label} ${action}: ${msg}`, 'w'); break; }
+        throw new Error(`${label}: ${msg}`);
+      }
+      out.push(...j.result);
+      if (j.result.length < OFF) break;
+      if (opt.from && +j.result[j.result.length - 1].timeStamp * 1000 < +opt.from) break;
+      if (page === maxP) { const d = new Date(+j.result[j.result.length - 1].timeStamp * 1000); if (!cutoff || d > cutoff) cutoff = d; break; }
+      await sleep(400);
+    }
+    await sleep(400);
+    return out;
+  };
+  for (const t of await paged('txlist')) {
+    const b = bucket(map, t.hash);
+    b.ts = new Date(+t.timeStamp * 1000); b.from = lc(t.from); b.to = lc(t.to || t.contractAddress);
+    b.method = (t.functionName || '').split('(')[0] || (t.methodId && t.methodId !== '0x' ? t.methodId : '');
+    b.ok = t.isError !== '1' && t.txreceipt_status !== '0'; b.initKnown = true;
+    if (b.from === a) b.fee = units((BigInt(t.gasUsed || 0) * BigInt(t.gasPrice || 0)).toString(), 18);
+    if (t.value !== '0' && b.ok) {
+      if (b.from === a && b.to !== a) b.legs.push(natLeg(chain, 'out', units(t.value, 18), b.to));
+      else if (b.to === a && b.from !== a) b.legs.push(natLeg(chain, 'in', units(t.value, 18), b.from));
+    }
+  }
+  for (const t of await paged('txlistinternal', true)) {
+    if (t.isError === '1' || t.value === '0') continue;
+    const b = bucket(map, t.hash); if (!b.ts) b.ts = new Date(+t.timeStamp * 1000);
+    const f = lc(t.from), to = lc(t.to); if (f === to) continue;
+    if (f === a) b.legs.push(natLeg(chain, 'out', units(t.value, 18), to));
+    else if (to === a) b.legs.push(natLeg(chain, 'in', units(t.value, 18), f));
+  }
+  const tok = (t, kind, amount, id) => {
+    const b = bucket(map, t.hash); if (!b.ts) b.ts = new Date(+t.timeStamp * 1000);
+    const f = lc(t.from), to = lc(t.to); if (f === to) return;
+    const dir = f === a ? 'out' : to === a ? 'in' : null; if (!dir) return;
+    b.legs.push({dir, amount, sym: t.tokenSymbol || t.tokenName || short(t.contractAddress), name: t.tokenName || '', token: lc(t.contractAddress),
+      kind, id, cp: dir === 'out' ? to : f, spam: false, fromZero: f === ZERO, toZero: to === ZERO || to === DEAD});
+  };
+  for (const t of await paged('tokentx', true)) tok(t, 'ERC-20', units(t.value, t.tokenDecimal), null);
+  for (const t of await paged('tokennfttx', true)) tok(t, 'ERC-721', 1, t.tokenID);
+  for (const t of await paged('token1155tx', true)) tok(t, 'ERC-1155', Number(t.tokenValue || 1), t.tokenID);
+  return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
+}
+
+/* ---------------- Source: DeBank Cloud ---------------- */
+async function fetchDebank(chain, addr, opt, key) {
+  const a = lc(addr), map = new Map(); let start = 0;
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await getJSON(`https://pro-openapi.debank.com/v1/user/history_list?id=${a}&chain_id=${chain.debank}&page_count=20${start ? `&start_time=${start}` : ''}`,
+      {headers: {AccessKey: key, accept: 'application/json'}});
+    const list = j.history_list || [], tokD = j.token_dict || {}, projD = j.project_dict || {}, cexD = j.cex_dict || {};
+    for (const h of list) {
+      const b = bucket(map, h.id); const tx = h.tx;
+      b.ts = new Date(h.time_at * 1000); b.from = lc(tx?.from_addr); b.to = lc(tx?.to_addr || h.other_addr);
+      b.method = tx?.name || ''; b.cate = h.cate_id || ''; b.ok = tx ? tx.status !== 0 : true; b.initKnown = !!tx;
+      b.toName = projD[h.project_id]?.name || cexD[h.cex_id]?.name || '';
+      if (b.from === a) b.fee = Number(tx?.eth_gas_fee || 0);
+      if (h.is_scam) b.flags.push('DeBank flagged transaction as scam');
+      const mk = (x, dir) => {
+        const t = tokD[x.token_id] || {}; const native = x.token_id === chain.debank;
+        const nft = !!(t.is_erc721 || t.is_erc1155 || t.contract_id);
+        return {dir, amount: Number(x.amount || 0), sym: native ? chain.native : (t.optimized_symbol || t.symbol || t.name || short(x.token_id)),
+          name: t.name || '', token: native ? 'native' : lc(t.contract_id || x.token_id), kind: native ? 'native' : nft ? (t.is_erc1155 ? 'ERC-1155' : 'ERC-721') : 'ERC-20',
+          id: nft ? (t.inner_id ?? null) : null, cp: lc(dir === 'out' ? x.to_addr : x.from_addr), spam: !!(t.is_scam || t.is_suspicious || h.is_scam),
+          fromZero: lc(x.from_addr) === ZERO, toZero: [ZERO, DEAD].includes(lc(x.to_addr))};
+      };
+      (h.sends || []).forEach(x => b.legs.push(mk(x, 'out')));
+      (h.receives || []).forEach(x => b.legs.push(mk(x, 'in')));
+    }
+    if (list.length < 20) break;
+    start = list[list.length - 1].time_at;
+    if (opt.from && start * 1000 < +opt.from) break;
+    await sleep(200);
+  }
+  return [...map.values()].filter(b => b.ts);
+}
+
+/* ---------------- Source routing ---------------- */
+async function fetchChain(chain, addr, opt) {
+  // Try Blockscout PRO first when a key is set; if your plan doesn't cover the chain, fall back (remembered per chain).
+  const pro = bsKeyVal() && chain.chainid && HELPER && !chain._proFail;
+  if (pro) {
+    try { return {txs: await fetchBlockscout(chain, addr, opt, true), via: 'Blockscout PRO'}; }
+    catch (e) {
+      if (e.message === 'Stopped') throw e;
+      chain._proFail = true;
+      const why = (e.message.match(/"(?:error|message)"\s*:\s*"([^"]+)/) || [])[1] || e.message;
+      log(`   Blockscout PRO can't serve ${chain.name} (${why.slice(0, 90)}) → using the next source`, 'w');
+    }
+  }
+  if (chain.src === 'blockscout') return {txs: await fetchBlockscout(chain, addr, opt, false), via: 'Blockscout'};
+  if (chain.src === 'routescan') {
+    const base = `https://api.routescan.io/v2/network/mainnet/evm/${chain.chainid}/etherscan/api?`;
+    return {txs: await fetchEtherscanLike(chain, addr, opt, base, '', 'Routescan'), via: 'Routescan'};
+  }
+  const es = opt.esKey, db = opt.dbKey; let lastErr;
+  if (es) {
+    try {
+      const base = `https://api.etherscan.io/v2/api?chainid=${chain.chainid}`;
+      return {txs: await fetchEtherscanLike(chain, addr, opt, base, `&apikey=${encodeURIComponent(es)}`, 'Etherscan'), via: 'Etherscan'};
+    } catch (e) { lastErr = e; if (db) log(`   Etherscan failed (${e.message.slice(0, 90)}) → trying DeBank`, 'w'); }
+  }
+  if (db) return {txs: await fetchDebank(chain, addr, opt, db), via: 'DeBank'};
+  throw lastErr || new Error('No API key — paste an Etherscan or DeBank key to use this chain');
+}
+
+/* ---------------- Classification ---------------- */
+const SPAM_RX = /https?:|www\.|t\.me|\.(com|io|xyz|org|net|app|site|top|live|cc|gift|club|vip|pro|us|ws|lat|claims?)\b|claim|visit|airdrop|voucher|giveaway|\bfree\b|\$\s?\d|reward pool|✅|🎁|🔥/i;
+const LST = /^(st|wst|r|cb|sfrx|frx|m|ankr|swe?|we|e|ez|rs|os|puf|s|ls)?(ETH|AVAX|BNB|MATIC|POL)$|^ETHx$|^BNBx$|^MaticX$|^slisBNB$|^sAVAX$|^stMATIC$|^ankr/i;
+const LST2 = /^(mSOL|jitoSOL|bSOL|JupSOL|INF|hSOL|vSOL|stSOL|bonkSOL|dSOL|st(ATOM|OSMO|TIA|INJ|DYDX|JUNO|STARS|SOMM|UMEE|SAGA|AKT|DYM)|tsTON|stTON|hTON|sTRX|stUSDT)$/i;
+const LSTSTRICT = s => (LST.test(s) || LST2.test(s)) && !/^(W?ETH|W?AVAX|W?BNB|W?MATIC|W?POL)$/i.test(s);
+const isNFT = l => l.kind === 'ERC-721' || l.kind === 'ERC-1155' || l.kind === 'NFT' || l.kind === 'ERC-404' && l.id != null;
+const isLP = l => /(^|[-_ ])LP($|[-_ ])|UNI-V2|UNI-V3-POS|SLP|Cake-LP|PCS-V3|BPT|crv|-f$|vAMM|sAMM|Pool Token|Positions? NFT|LP Token|G-UNI|ARRAKIS|^HLP|aero|^GAMM-|AMM-LP/i.test(`${l.sym} ${l.name}`) && !/^aEth|^a(Arb|Opt|Bas|Pol|Ava)/.test(l.sym);
+const legStr = l => `${fmtNum(l.amount)} ${l.sym}${l.id != null && isNFT(l) ? ' #' + String(l.id).slice(0, 18) : ''}`;
+const ccy = l => l ? (isNFT(l) ? `${l.sym} #${String(l.id ?? '').slice(0, 18)}` : l.sym) : '';
+
+function netLegs(legs) {
+  const out = [], g = new Map();
+  for (const l of legs) {
+    if (isNFT(l)) { out.push(l); continue; }
+    const k = l.token; const cur = g.get(k);
+    const signed = l.dir === 'in' ? l.amount : -l.amount;
+    if (!cur) g.set(k, {...l, net: signed, maxAmt: l.amount});
+    else { cur.net += signed; if (l.amount > cur.maxAmt) { cur.maxAmt = l.amount; cur.cp = l.cp; } cur.spam = cur.spam || l.spam; }
+  }
+  for (const l of g.values()) {
+    if (Math.abs(l.net) < 1e-18) { if (l.maxAmt === 0) out.push({...l, amount: 0}); continue; }
+    out.push({...l, dir: l.net > 0 ? 'in' : 'out', amount: Math.abs(l.net)});
+  }
+  return out;
+}
+
+const LOOKALIKE = l => l.kind !== 'native' && /[^\x20-\x7E]/.test(l.sym) && /[A-Za-z]/.test(l.sym);
+function spamReason(b, a, ins, outs, used) {
+  const init = b.from === a;
+  if (init) return '';
+  if (outs.length && outs.every(l => l.amount === 0)) return 'zero-value transfer out of your wallet that you did not sign (address-poisoning attack)';
+  if (outs.length && !ins.length && outs.every(isNFT)) return 'NFT "transfer out" you did not sign — fake event emitted by a spam contract';
+  if (outs.length && !ins.length && outs.every(l => l.kind !== 'native' && (l.spam || LOOKALIKE(l) || SPAM_RX.test(l.sym) || SPAM_RX.test(l.name) || (l.priced === false && !used.has(l.token)))))
+    return `fake "transfer out" of a spam/lookalike token (${outs[0].sym}) you never held or used — emitted by a scam contract`;
+  const look = ins.find(LOOKALIKE); if (look && !outs.length) return `lookalike token "${look.sym}" using look-alike foreign characters to imitate a real token`;
+  if (!ins.length || outs.length) return '';
+  if (ins.every(l => l.kind !== 'native' && l.amount === 0)) return 'zero-value token transfer (address-poisoning attack)';
+  const bad = ins.find(l => l.spam); if (bad) return `token ${bad.sym} is flagged as scam/spam by the explorer`;
+  const sus = ins.find(l => l.kind !== 'native' && (SPAM_RX.test(l.sym) || SPAM_RX.test(l.name)));
+  if (sus) return `unsolicited token with a phishing-style name ("${(sus.name || sus.sym).slice(0, 60)}")`;
+  if (b.flags.length) return b.flags[0];
+  return '';
+}
+
+function classify(b, ctx) {
+  const a = ctx.addr, ch = ctx.chain, init = b.from === a;
+  const m = lc(b.method), nm = lc(b.toName), all = `${m} ${nm} ${lc(b.cate)}`;
+  const proto = b.toName ? ` on ${b.toName}` : (b.to && b.to !== a ? ` via contract ${short(b.to)}` : '');
+  const mtxt = b.method ? `Method: ${b.method}` : 'Plain transfer';
+  const rows = [];
+  const add = (type, cat, buy, sell, lp, comment) => rows.push({type, cat, buy, sell, lp: lp || '', comment});
+  const feeOnly = (cat, comment) => ({type: 'Other Fee', cat, buy: null, sell: b.fee ? {amount: b.fee, sym: b.feeCur || ch.native, kind: 'native'} : null, lp: '', comment, feeIsSell: true});
+
+  if (!b.ok) return init ? [feeOnly('Failed Transaction', `Failed/reverted transaction (${mtxt}${proto}). Only the gas fee was paid.`)] : [];
+
+  const legs = netLegs(b.legs);
+  let ins = legs.filter(l => l.dir === 'in'), outs = legs.filter(l => l.dir === 'out');
+  const spam = spamReason(b, a, ins, outs, ctx.usedTokens);
+  if (spam) {
+    if (ins.length + outs.length > 3) {
+      const l = ins[0] || outs[0], more = ins.length + outs.length - 1;
+      add(ins.length ? 'Airdrop' : 'Withdrawal', 'Scam/Spam', ins.length ? l : null, ins.length ? null : l, '', `SCAM/SPAM – ${spam}. ${legStr(l)} plus ${more} more spam transfers in this one transaction (collapsed into one row). Ignore in CoinTracking.`);
+      return rows;
+    }
+    for (const l of ins) add('Airdrop', 'Scam/Spam', l, null, '', `SCAM/SPAM – ${spam}. Received ${legStr(l)} from ${short(l.cp)}. Do NOT interact with it; normally ignored in CoinTracking.`);
+    for (const l of outs) add('Withdrawal', 'Scam/Spam', null, l, '', `SCAM/SPAM – ${spam}. Lookalike sender ${short(b.from)}; never copy addresses from your history.`);
+    return rows;
+  }
+  // drop zero-amount fungible legs now
+  ins = ins.filter(l => l.amount > 0 || isNFT(l)); outs = outs.filter(l => l.amount > 0 || isNFT(l));
+  const fIn = ins.filter(l => !isNFT(l)), fOut = outs.filter(l => !isNFT(l)), nIn = ins.filter(isNFT), nOut = outs.filter(isNFT);
+  const sent = outs.map(legStr).join(' + '), got = ins.map(legStr).join(' + ');
+  const flow = [sent && `sent ${sent}`, got && `received ${got}`].filter(Boolean).join('; ');
+  const mostCp = arr => { const c = {}; arr.forEach(l => { if (l.cp) c[l.cp] = (c[l.cp] || 0) + 1; }); return Object.entries(c).sort((x, y) => y[1] - x[1])[0]?.[0] || ''; };
+  const legsRows = (cat, lp, cmt) => { outs.forEach(l => add('Withdrawal', cat, null, l, lp, cmt)); ins.forEach(l => add('Deposit', cat, l, null, lp, cmt)); };
+  const tradeRows = (cat, lp, cmt, o = outs, i = ins) => {
+    const n = Math.max(o.length, i.length);
+    for (let k = 0; k < n; k++) {
+      const buy = i[k] || null, sell = o[k] || null;
+      add(buy && sell ? 'Trade' : buy ? 'Deposit' : 'Withdrawal', cat, buy, sell, lp, cmt + (n > 1 ? ` [leg ${k + 1}/${n}]` : ''));
+    }
+  };
+
+  // --- Liquidity pools ---
+  const lpIn = ins.find(isLP), lpOut = outs.find(isLP);
+  const posMgr = /position|nonfungiblepositionmanager|liquidity|amm|pool|pair/.test(nm);
+  const addLP = (lpIn && outs.some(l => !isLP(l))) || /addliquidity|increaseliquidity|add_liquidity|joinpool|provideliquidity/.test(m) || (posMgr && /mint|multicall/.test(m) && fOut.length >= 1 && !fIn.length);
+  const remLP = (lpOut && ins.some(l => !isLP(l))) || /removeliquidity|decreaseliquidity|remove_liquidity|exitpool|withdrawliquidity/.test(m) || (posMgr && /multicall|burn/.test(m) && fIn.length >= 1 && !fOut.length);
+  if (addLP && outs.length) {
+    const pool = (lpIn && lpIn.kind === 'ERC-20') ? lpIn.token : mostCp(outs.filter(l => !isLP(l))) || b.to;
+    legsRows('DeFi - Liquidity Pool (Add)', pool, `Added liquidity${proto}: ${flow}. Pool/LP: ${pool}. ${mtxt}.`);
+    return rows;
+  }
+  if (remLP && ins.length) {
+    const pool = (lpOut && lpOut.kind === 'ERC-20') ? lpOut.token : mostCp(ins.filter(l => !isLP(l))) || b.to;
+    legsRows('DeFi - Liquidity Pool (Remove)', pool, `Removed liquidity${proto}: ${flow}. Pool/LP: ${pool}. ${mtxt}.`);
+    return rows;
+  }
+  if (/collect/.test(m) && posMgr && ins.length && !outs.length) {
+    const pool = mostCp(ins) || b.to;
+    ins.forEach(l => add('Reward / Bonus', 'DeFi - LP Fees Claimed', l, null, pool, `Collected liquidity-provider fees${proto}: ${got}. ${mtxt}.`));
+    return rows;
+  }
+
+  // --- Wrap / unwrap ---
+  const W = new RegExp(`^W(${ch.native}|ETH|BNB|AVAX|MATIC|POL|XDAI)$`, 'i');
+  const wrapCtx = /^wrapped |^w(eth|bnb|avax|matic|pol|xdai)$/.test(nm) || [...ins, ...outs].some(l => W.test(l.sym));
+  if (wrapCtx && legs.length <= 2 && (/^deposit$|^withdraw$|^wrap|^unwrap/.test(m) || (fIn.length === 1 && fOut.length === 1 && ((fIn[0].kind === 'native' && W.test(fOut[0].sym)) || (fOut[0].kind === 'native' && W.test(fIn[0].sym)))))) {
+    let o = fOut, i = fIn;
+    if (m === 'deposit' && fOut.length === 1 && !fIn.length && fOut[0].kind === 'native') i = [{...fOut[0], dir: 'in', sym: 'W' + ch.native, kind: 'ERC-20', token: b.to}];
+    if (m === 'withdraw' && fIn.length === 1 && !fOut.length && fIn[0].kind === 'native') o = [{...fIn[0], dir: 'out', sym: 'W' + ch.native, kind: 'ERC-20', token: b.to}];
+    const s = [o.map(legStr).join(' + '), i.map(legStr).join(' + ')];
+    tradeRows('Wrap/Unwrap', '', `${m === 'withdraw' ? 'Unwrapped' : 'Wrapped'} ${s[0]} → ${s[1]}${proto}. ${mtxt}.`, o, i);
+    return rows;
+  }
+
+  // --- Claims / rewards / airdrops ---
+  const stakeCtx = /stak|lido|rocket|validator|eigen|restak|delegat|masterchef|farm|gauge|vault|beefy|yearn|convex|pendle|locker|vote|boost|reward|chef|ankr|frax|swell|etherfi|renzo|kelp|puffer|jito|benqi|stader|lista/.test(nm) || /stake|delegate|getreward|harvest|compound|restake/.test(m);
+  const lendCtx = /aave|compound|morpho|spark|venus|radiant|euler|lend|benqi|moonwell|seamless|fluid|kinza|silo|granary|agave|comet|ctoken|pool proxy|l2pool/.test(nm) || /borrow|repay|supply|liquidat/.test(m);
+  const bridgeCtx = /bridge|stargate|hop |hop\.|across|layerzero|wormhole|synapse|orbiter|relay|portal|celer|cbridge|multichain|socket|li\.fi|lifi|rhino|connext|axelar|squid|l1standard|l2standard|gateway|inbox|messenger|zksync diamond|scroll messenger|ibc|debridge|dln|mayan|allbridge/.test(nm) || /bridge|sendtol2|outboundtransfer|depositeth|depositerc20|finalize|swapandbridge|sendfrom|deposittransaction|relaymessage|startbridge/.test(m);
+  if (/claim|harvest|getreward|compound|redeemreward|collectreward/.test(m) && ins.length && !outs.length) {
+    const isAir = /airdrop|merkle|distributor|drop/.test(all);
+    const type = isAir ? 'Airdrop' : stakeCtx ? 'Staking' : 'Reward / Bonus';
+    const cat = isAir ? 'Airdrop Claim' : stakeCtx ? 'DeFi - Staking Rewards' : 'DeFi - Rewards Claim';
+    ins.forEach(l => add(type, cat, l, null, stakeCtx ? b.to : '', `${isAir ? 'Claimed airdrop' : 'Claimed rewards'}${proto}: ${legStr(l)}. ${mtxt}.`));
+    return rows;
+  }
+
+  // --- Bridge ---
+  if (bridgeCtx && (ins.length || outs.length) && !(fIn.length && fOut.length && !/bridge/.test(all))) {
+    outs.forEach(l => add('Withdrawal', 'Bridge (Outgoing)', null, l, '', `Bridged out ${legStr(l)}${proto} to another chain. ${mtxt}. Match with the Deposit on the destination chain.`));
+    ins.forEach(l => add('Deposit', 'Bridge (Incoming)', l, null, '', `Bridged in ${legStr(l)}${proto} from another chain. ${mtxt}.`));
+    return rows;
+  }
+
+  // --- Lending ---
+  if (lendCtx && !nIn.length && !nOut.length && (ins.length || outs.length)) {
+    const what = /borrow/.test(m) ? 'Borrowed (loan – not income)' : /repay/.test(m) ? 'Repaid loan' : /withdraw|redeem/.test(m) ? 'Withdrew collateral/deposit' : /liquidat/.test(m) ? 'Liquidation' : 'Supplied/deposited';
+    legsRows('DeFi - Lending', b.to, `${what}${proto}: ${flow}. ${mtxt}.`);
+    return rows;
+  }
+
+  // --- Staking / liquid staking / vaults ---
+  const lstIn = fIn.find(l => LSTSTRICT(l.sym)), lstOut = fOut.find(l => LSTSTRICT(l.sym));
+  if ((lstIn && fOut.length && !fIn.filter(l => l !== lstIn).length) || (lstOut && fIn.length && !fOut.filter(l => l !== lstOut).length)) {
+    tradeRows('DeFi - Liquid Staking', b.to, `${lstIn ? 'Staked' : 'Unstaked'}${proto}: ${flow}. Liquid-staking token swap. ${mtxt}.`);
+    return rows;
+  }
+  if (stakeCtx && (ins.length || outs.length) && !nIn.length && !nOut.length) {
+    const unst = /unstake|withdraw|exit|redeem|undelegate|unlock|leave|claimwithdraw/.test(m) || (ins.length && !outs.length);
+    const cat = unst ? 'DeFi - Staking (Unstake)' : 'DeFi - Staking (Stake)';
+    if (fIn.length && fOut.length) tradeRows(cat, b.to, `${unst ? 'Unstaked/withdrew' : 'Staked/deposited'}${proto}: ${flow}. ${mtxt}.`);
+    else legsRows(cat, b.to, `${unst ? 'Unstaked/withdrew' : 'Staked/deposited'}${proto}: ${flow}. ${mtxt}.`);
+    return rows;
+  }
+
+  // --- NFTs ---
+  if (nIn.length || nOut.length) {
+    if (nIn.length && fOut.length) { tradeRows(nIn.some(l => l.fromZero) ? 'NFT - Mint (Paid)' : 'NFT - Buy', '', `${nIn.some(l => l.fromZero) ? 'Minted' : 'Bought'} NFT${proto}: ${flow}. ${mtxt}.`, fOut, nIn); fIn.forEach(l => add('Deposit', 'NFT - Buy', l, null, '', `Refund/extra received: ${legStr(l)}.`)); return rows; }
+    if (nOut.length && fIn.length) { tradeRows('NFT - Sale', '', `Sold NFT${proto}: ${flow}. ${mtxt}.`, nOut, fIn); fOut.forEach(l => add('Withdrawal', 'NFT - Sale', null, l, '', `Paid: ${legStr(l)}.`)); return rows; }
+    nIn.forEach(l => add(l.fromZero ? 'Airdrop' : 'Deposit', l.fromZero ? (init ? 'NFT - Free Mint' : 'NFT - Airdrop') : 'NFT - Transfer In', l, null, '',
+      `${l.fromZero ? (init ? 'Free-minted' : 'Received airdropped') : 'Received'} NFT ${legStr(l)}${l.fromZero ? '' : ' from ' + short(l.cp)}${proto}. ${mtxt}.`));
+    nOut.forEach(l => add('Withdrawal', l.toZero ? 'NFT - Burn' : 'NFT - Transfer Out', null, l, '', `${l.toZero ? 'Burned' : 'Sent'} NFT ${legStr(l)}${l.toZero ? '' : ' to ' + short(l.cp)}${proto}. ${mtxt}.`));
+    fIn.forEach(l => add('Deposit', 'Transfer In', l, null, '', `Received ${legStr(l)}${proto}. ${mtxt}.`));
+    fOut.forEach(l => add('Withdrawal', 'Transfer Out', null, l, '', `Sent ${legStr(l)}${proto}. ${mtxt}.`));
+    return rows;
+  }
+
+  // --- Swaps ---
+  if (fIn.length && fOut.length) {
+    tradeRows('DeFi - Swap', '', `Swapped${proto}: ${flow}. ${mtxt}.`);
+    return rows;
+  }
+
+  // --- Plain transfers / contract deposits ---
+  const plain = !m || /^transfer|^send|^0x$|^0xa9059cbb|^0x$/.test(m);
+  if (fIn.length) {
+    fIn.forEach(l => {
+      if (!init && b.possibleSpam)
+        add('Airdrop', 'Possible Spam (review)', l, null, '', `POSSIBLE SPAM – ${b.possibleSpam}. Received ${legStr(l)} from ${short(l.cp)}. Check before importing.`);
+      else if (!init && l.kind !== 'native' && l.priced === false && !ctx.usedTokens.has(l.token))
+        add('Airdrop', 'Possible Spam (review)', l, null, '', `POSSIBLE SPAM – unsolicited token ${legStr(l)} from ${short(l.cp)}; it has no market price on the explorer and you never moved it. Check before importing. ${mtxt}.`);
+      else if (l.fromZero && !init) add('Airdrop', 'Airdrop (Received)', l, null, '', `Tokens minted directly to your wallet${proto}: ${legStr(l)}. Likely an airdrop. ${mtxt}.`);
+      else if (!plain && init) add('Deposit', 'DeFi - Contract Withdrawal', l, null, b.to, `Received ${legStr(l)} from contract${proto}. ${mtxt}.`);
+      else if (ctx.ownAddrs?.has(l.cp)) add('Deposit', 'Transfer (Own Wallets)', l, null, '', `Received ${legStr(l)} from your own wallet ${ctx.ownAddrs.get(l.cp)} (${short(l.cp)}). ${mtxt}.`);
+      else add('Deposit', 'Transfer In', l, null, '', `Received ${legStr(l)} from ${short(l.cp)}${l.cpName ? ` (${l.cpName})` : b.toName && !init ? ` (${b.toName})` : ''}. ${mtxt}.`);
+    });
+    return rows;
+  }
+  if (fOut.length) {
+    fOut.forEach(l => {
+      if (!init) add('Withdrawal', 'Transfer Out (not signed by you)', null, l, '', `WARNING – ${legStr(l)} left your wallet to ${short(l.cp)} in a transaction you did not sign (sent by ${short(b.from) || 'unknown'}). Usually a gasless/intent swap you signed off-chain (UniswapX, CoW, 1inch Fusion — check what you received) or an approved contract pulling funds; if you don't recognise it, it may be a drain/theft. ${mtxt}.`);
+      else if (l.toZero) add('Withdrawal', 'Burn', null, l, '', `Burned ${legStr(l)} (sent to ${short(l.cp)}). ${mtxt}.`);
+      else if (!plain && b.toIsContract !== false && init) add('Withdrawal', 'DeFi - Contract Deposit', null, l, b.to, `Sent ${legStr(l)} into contract${proto}. ${mtxt}. Review: could be a deposit into a protocol.`);
+      else if (ctx.ownAddrs?.has(l.cp)) add('Withdrawal', 'Transfer (Own Wallets)', null, l, '', `Sent ${legStr(l)} to your own wallet ${ctx.ownAddrs.get(l.cp)} (${short(l.cp)}). ${mtxt}.`);
+      else add('Withdrawal', 'Transfer Out', null, l, '', `Sent ${legStr(l)} to ${short(l.cp)}${l.cpName ? ` (${l.cpName})` : ''}. ${mtxt}.`);
+    });
+    return rows;
+  }
+
+  // --- No value moved ---
+  if (!init) return [];
+  if (b.noValue) return [feeOnly(b.noValue.cat, b.noValue.comment)];
+  if (/approv|permit|setapprovalforall|increaseallowance/.test(m)) return [feeOnly('Approval', `Token approval${proto} (${mtxt}). No funds moved; gas fee only.`)];
+  if (b.to === a) return [feeOnly('Self Transfer / Cancel', `Transaction to yourself${b.toName ? ' — ' + b.toName : ' (often a cancel/speed-up)'}. Network fee only.`)];
+  if (/^$/.test(b.to) && ch.family === 'evm') return [feeOnly('Contract Deployment', `Contract deployment. Gas fee only.`)];
+  return [feeOnly('Contract Interaction', `Contract interaction${proto} (${mtxt}) with no token movement for this wallet. Gas fee only.`)];
+}
+
+/* ---------------- Run ---------------- */
+let RESULT = [], WALLETS = [];
+function selectedChains() {
+  const list = ALL_CHAINS.filter(c => $('ch_' + c.id)?.checked);
+  for (const line of $('custom').value.split('\n')) {
+    const [code, url, nat] = line.split(',').map(s => (s || '').trim());
+    if (code && /^https?:\/\//.test(url || '')) list.push({id: 'c_' + code, name: code, code: code.toUpperCase(), native: (nat || 'ETH').toUpperCase(), src: 'blockscout', url, family: 'evm', txUrl: h => url.replace(/\/$/, '') + '/tx/' + h});
+  }
+  return list;
+}
+function getOpt() {
+  return {maxPages: Math.max(1, +$('maxPages').value || 40), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
+    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(),
+    from: $('dFrom').value ? new Date($('dFrom').value + 'T00:00:00Z') : null, to: $('dTo').value ? new Date($('dTo').value + 'T23:59:59Z') : null};
+}
+
+/* ---------- Step 1: scan where each address is active ---------- */
+let SCAN = [];      // [{input, det, items:[{chain, addr, status, count, note, sel}], explorers:[{ex, count}]}]
+const DEBANK_USED = {};
+// Blockscout activity check. Counters can be stale (e.g. Base shows 0), so a 0 is double-checked against the lists.
+// Returns null when this Blockscout endpoint can't serve the chain (plan/network not supported).
+async function bsActivity(base, keyQ, addr) {
+  const get = async p => { const r = await fetch(`${base}/api/v2/addresses/${addr}/${p}${keyQ}`); const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch {} return {r, j, t}; };
+  const c = await get('counters');
+  if (c.r.status === 402 || /not supported|requires one of/i.test(c.t)) return null;
+  if (c.r.status === 404) return {active: false, count: 0};
+  if (!c.r.ok) throw new Error(`HTTP ${c.r.status}`);
+  const n = (+c.j.transactions_count || 0) + (+c.j.token_transfers_count || 0);
+  if (n > 0) return {active: true, count: n};
+  for (const list of ['transactions', 'token-transfers']) {
+    const x = await get(list);
+    if (x.r.ok && (x.j.items || []).length) return {active: true, count: x.j.next_page_params ? '50+' : x.j.items.length};
+  }
+  return {active: false, count: 0};
+}
+async function scanEvm(chain, addr, opt) {
+  const proBase = opt.bs && HELPER && chain.chainid ? `${PRO}/${chain.chainid}` : null, proQ = proBase ? `?apikey=${encodeURIComponent(opt.bs)}` : '';
+  const bs = (base, q) => bsActivity(base, q, addr);
+  if (chain.src === 'blockscout') {
+    if (proBase) { const r = await bs(proBase, proQ).catch(() => null); if (r) return r; }
+    return await bs(chain.url.replace(/\/$/, ''), '');
+  }
+  if (chain.src === 'keyed' && proBase) { const r = await bs(proBase, proQ).catch(() => null); if (r) return r; }
+  if (chain.src === 'routescan' || (chain.src === 'keyed' && opt.esKey)) {
+    const base = chain.src === 'routescan' ? `https://api.routescan.io/v2/network/mainnet/evm/${chain.chainid}/etherscan/api?` : `https://api.etherscan.io/v2/api?chainid=${chain.chainid}&apikey=${encodeURIComponent(opt.esKey)}`;
+    let any = 0;
+    for (const action of ['txlist', 'tokentx']) {
+      const j = await getJSON(`${base}&module=account&action=${action}&address=${addr}&page=1&offset=1`);
+      if (j.status === '1' && j.result?.length) any++;
+      else if (j.status === '0' && !/no (transactions|records)/i.test(`${j.message} ${j.result}`)) { if (chain.src === 'keyed' && opt.dbKey) break; return {status: 'error', note: String(j.result || j.message).slice(0, 60)}; }
+      await sleep(350);
+    }
+    if (any) return {active: true, count: '✓'};
+    if (!(chain.src === 'keyed' && opt.dbKey)) return {active: false, count: 0};
+  }
+  if (chain.src === 'keyed' && opt.dbKey) {
+    if (!DEBANK_USED[addr]) DEBANK_USED[addr] = getJSON(`https://pro-openapi.debank.com/v1/user/used_chain_list?id=${addr}`, {headers: {AccessKey: opt.dbKey}}).then(l => new Set((l || []).map(c => c.id)));
+    const used = await DEBANK_USED[addr];
+    return {active: used.has(chain.debank), count: used.has(chain.debank) ? '✓' : 0};
+  }
+  return {status: 'needs key', note: 'Etherscan/DeBank key'};
+}
+async function scanOne(chain, addr, opt) {
+  try {
+    const r = chain.family === 'evm' ? await scanEvm(chain, addr, opt) : await chain.scan(addr, opt);
+    return {status: r.status || (r.active ? 'active' : 'none'), count: r.count, note: r.note || ''};
+  } catch (e) { return {status: 'error', note: e.message.slice(0, 90)}; }
+}
+async function scan() {
+  const raw = [...new Set($('addrs').value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean))];
+  $('log').textContent = 'Scanning…';
+  if (!raw.length) { log('Enter at least one wallet address.', 'e'); return; }
+  const chains = selectedChains(); if (!chains.length) { log('Select at least one blockchain.', 'e'); return; }
+  const exps = EXPLORERS.filter(x => $('ex_' + x.id)?.checked);
+  const opt = getOpt(); saveKeys(); await helperUp();
+  if (!HELPER) log('ℹ Helper not running: Blockscout PRO, Bitcoin xpub/zpub and Cardano will show ⚠. Run "python3 start-classifier.py" to enable them.', 'w');
+  STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false;
+  SCAN = [];
+  for (const input of raw) {
+    const det = await detectAddress(input);
+    const entry = {input, det, items: [], explorers: []}; SCAN.push(entry);
+    if (!det.family) { log(`⚠ ${input}: address format not recognised`, 'w'); continue; }
+    const targets = chains.map(c => ({chain: c, addr: chainAddr(c, det)})).filter(t => t.addr);
+    if (!targets.length) { log(`⚠ ${short(input)} (${det.label}): none of the ticked chains use this address type`, 'w'); continue; }
+    log(`▶ ${short(input)} (${det.label}): checking ${targets.length} chain(s)…`);
+    // check up to 4 chains at a time
+    for (let i = 0; i < targets.length; i += 4) {
+      if (STOP) break;
+      const part = targets.slice(i, i + 4);
+      const res = await Promise.all(part.map(t => scanOne(t.chain, t.addr, opt)));
+      part.forEach((t, k) => entry.items.push({chain: t.chain, addr: t.addr, ...res[k], sel: res[k].status === 'active'}));
+      renderScan();
+    }
+    for (const ex of exps.filter(x => x.families.includes(det.family))) {
+      try { entry.explorers.push({ex, count: await ex.scan(det.addr, opt)}); } catch (e) { entry.explorers.push({ex, count: '⚠ ' + e.message.slice(0, 40)}); }
+    }
+    const act = entry.items.filter(x => x.status === 'active').map(x => x.chain.code);
+    log(`   active on: ${act.length ? act.join(', ') : 'none of the checked chains'}`, act.length ? 'g' : '');
+    renderScan();
+  }
+  log('Scan done. Untick anything you don\'t want, then press ② Fetch & classify.', 'g');
+  $('scan').disabled = false; $('stop').disabled = true; $('run').disabled = !SCAN.some(e => e.items.some(x => x.sel));
+}
+function renderScan() {
+  $('scanCard').hidden = !SCAN.length;
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  $('scanOut').innerHTML = SCAN.map((e, ei) => {
+    const pills = e.items.map((x, xi) => {
+      const icon = {active: '✓', none: '—', error: '⚠', 'needs key': '🔑'}[x.status] || '?';
+      const cls = {active: 'on', none: 'off', error: 'err', 'needs key': 'key'}[x.status] || '';
+      return `<label class="pill ${cls}" title="${esc(x.note || x.addr)}"><input type="checkbox" data-e="${ei}" data-x="${xi}" ${x.sel ? 'checked' : ''} ${x.status === 'needs key' ? 'disabled' : ''}>${esc(x.chain.name)} ${icon}${x.count && x.count !== '✓' ? ' ' + esc(x.count) + ' tx' : ''}${x.status === 'error' ? ' ' + esc(x.note.slice(0, 40)) : ''}</label>`;
+    }).join('');
+    const ex = e.explorers.map(x => `<span class="pill">${esc(x.ex.name)}: ${esc(x.count)}</span>`).join('');
+    return `<div class="scanaddr"><h3>${esc(e.input)} <span class="fam">· ${esc(e.det.label)}</span></h3><div class="pills">${pills || '<span class="hint">no matching chains ticked</span>'}</div>${ex ? `<div class="pills" style="margin-top:6px">${ex}</div>` : ''}</div>`;
+  }).join('');
+  $('scanOut').querySelectorAll('input[type=checkbox]').forEach(cb => cb.onchange = () => { SCAN[cb.dataset.e].items[cb.dataset.x].sel = cb.checked; $('run').disabled = !SCAN.some(e => e.items.some(x => x.sel)); });
+}
+
+/* ---------- Step 2: fetch + classify the ticked chain/address pairs ---------- */
+async function fetchAny(chain, addr, opt) {
+  if (chain.family === 'evm') return fetchChain(chain, addr, opt);
+  const via = chain.via ? chain.via(addr) : chain.label?.split(' · ')[0] || chain.name;
+  return {txs: await chain.fetch(addr, opt), via};
+}
+async function run() {
+  if (!SCAN.length) { await scan(); if (!SCAN.length) return; }
+  const opt = getOpt(); saveKeys(); await helperUp();
+  $('log').textContent = 'Fetching…';
+  STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false; $('xlsx').disabled = true;
+  RESULT = []; WALLETS = [];
+  const utc = $('utc').checked;
+  const counters = {}, ownAddrs = new Map();
+  // wallet names: per chain, numbered in the order the addresses were entered
+  const jobs = [];
+  for (const chain of ALL_CHAINS.concat(selectedChains().filter(c => c.id.startsWith('c_')))) {
+    for (const e of SCAN) for (const x of e.items) if (x.sel && x.chain.id === chain.id) {
+      counters[chain.id] = (counters[chain.id] || 0) + 1;
+      const wname = `${chain.code}_${counters[chain.id]}`; jobs.push({chain, addr: x.addr, input: e.input, wname}); ownAddrs.set(x.addr, wname);
+    }
+  }
+  CHAINS.forEach(c => delete c._proFail);
+  try {
+    for (const job of jobs) {
+      if (STOP) throw new Error('Stopped');
+      const {chain, addr, wname} = job;
+      let res;
+      try { log(`▶ ${wname} (${chain.name}, ${short(addr)}): fetching…`); res = await fetchAny(chain, addr, opt); }
+      catch (e) { if (e.message === 'Stopped') throw e; log(`   ${wname}: ${e.message}`, 'e'); WALLETS.push({chain: chain.name, wallet: wname, addr, rows: 0, note: 'Error: ' + e.message}); continue; }
+      const txs = res.txs.filter(b => (!opt.from || b.ts >= opt.from) && (!opt.to || b.ts <= opt.to)).sort((x, y) => x.ts - y.ts);
+      const usedTokens = new Set(); res.txs.forEach(b => { if (b.from === addr) b.legs.forEach(l => { if (l.dir === 'out') usedTokens.add(l.token); }); });
+      let count = 0;
+      for (const b of txs) {
+        let rows;
+        try { rows = [...(b.preRows || []), ...(b.legs.length || !b.preRows?.length || b.noValue || !b.ok ? classify(b, {addr, chain, usedTokens, ownAddrs}) : [])]; }
+        catch (e) { rows = [{type: 'Other Fee', cat: 'Unclassified', buy: null, sell: null, lp: '', comment: 'Could not classify: ' + e.message}]; }
+        if (!rows.length && b.from === addr && b.fee) rows = [{type: 'Other Fee', cat: 'Contract Interaction', buy: null, sell: {amount: b.fee, sym: b.feeCur || chain.native, kind: 'native'}, lp: '', comment: `Transaction with no balance change (${b.typesText || b.method || 'unknown'}). Fee only.`, feeIsSell: true}];
+        rows.forEach((r, i) => {
+          const feeHere = i === 0 && b.fee && !r.feeIsSell && !rows.some(z => z.feeIsSell);
+          const extra = [b.typesText && !r.comment.includes(b.typesText) ? `Msgs: ${b.typesText}.` : '', b.desc ? `Explorer: ${b.desc}` : ''].filter(Boolean).join(' ');
+          RESULT.push({
+            'Type': r.type, 'Category': r.cat,
+            'Buy Currency': ccy(r.buy), 'Buy Amount': r.buy ? r.buy.amount : '',
+            'Sell Amount': r.sell ? r.sell.amount : '', 'Sell Currency': ccy(r.sell),
+            'Fee Currency': feeHere ? (b.feeCur || chain.native) : '', 'Fee Amount': feeHere ? b.fee : '',
+            'Exchange/Wallet Name': wname, 'Transaction Hash': b.hash, 'Liquidity Pool Address': r.lp || '',
+            'Date': fmtDate(b.ts, utc), 'Comments': r.comment + (extra && i === 0 ? ' ' + extra : ''), 'Chain': chain.name, 'Wallet Address': addr,
+            'Explorer Link': b.url ? b.url : chain.txUrl ? chain.txUrl(b.hash) : (chain.explorer || chain.url) + '/tx/' + b.hash, _ts: +b.ts, _fam: chain.family});
+          count++;
+        });
+      }
+      WALLETS.push({chain: chain.name, wallet: wname, addr, rows: count, note: `via ${res.via}; ${res.txs.length} transactions${opt.from || opt.to ? `, ${txs.length} in date range` : ''}`});
+      log(`   ${wname}: ${res.txs.length} txs → ${count} rows (via ${res.via})`, 'g');
+    }
+    await enrich(opt);
+    log('Done.', 'g');
+  } catch (e) { log(e.message === 'Stopped' ? 'Stopped — showing what was fetched so far.' : 'Error: ' + e.message, e.message === 'Stopped' ? 'w' : 'e'); }
+  $('scan').disabled = false; $('run').disabled = false; $('stop').disabled = true; $('xlsx').disabled = !RESULT.length;
+  render();
+}
+
+/* ---------- Explorer enrichment (deBridge, LayerZero, Wormhole, OpenSea, Zerion) ---------- */
+const GENERIC = new Set(['Contract Interaction', 'DeFi - Contract Deposit', 'DeFi - Contract Withdrawal', 'Transfer Out', 'Transfer In', 'Transfer Out (not signed by you)', 'NFT - Transfer In', 'NFT - Transfer Out', 'DeFi - Swap']);
+async function enrich(opt) {
+  const exps = EXPLORERS.filter(x => $('ex_' + x.id)?.checked); if (!exps.length || !RESULT.length) return;
+  const notes = new Map(); // lowercased tx hash -> [{cat, comment}]
+  const addrs = new Map(); SCAN.forEach(e => { if (e.det.family && e.items.some(x => x.sel)) addrs.set(e.det.addr, e.det.family); });
+  for (const ex of exps) for (const [a, fam] of addrs) {
+    if (!ex.families.includes(fam) || STOP) continue;
+    if (ex.key && !opt[ex.key]) continue;
+    try {
+      log(`▶ ${ex.name}: ${short(a)}…`);
+      const list = await ex.fetch(a, opt);
+      list.forEach(n => { if (!n.hash) return; const k = lc(n.hash); if (!notes.has(k)) notes.set(k, []); notes.get(k).push(n); });
+      log(`   ${ex.name}: ${list.length} record(s)`, 'g');
+    } catch (e) { log(`   ${ex.name}: ${e.message.slice(0, 100)}`, 'w'); }
+  }
+  let hit = 0;
+  for (const r of RESULT) {
+    const ns = notes.get(lc(r['Transaction Hash'])); if (!ns) continue; hit++;
+    for (const n of ns) {
+      if (!r.Comments.includes(n.comment)) r.Comments += ' ' + n.comment;
+      if (n.cat && (GENERIC.has(r.Category) || (n.trash && r.Category !== 'Scam/Spam')) && !(r.Category === 'DeFi - Swap' && /Bridge/.test(n.cat) === false)) r.Category = n.cat;
+    }
+  }
+  log(`Explorers matched ${hit} row(s).`, 'g');
+}
+
+/* ---------------- Table ---------------- */
+let fCat = null, fWal = null;
+function render() {
+  $('results').hidden = !RESULT.length; if (!RESULT.length) return;
+  const cats = {}, wals = {};
+  RESULT.forEach(r => { cats[r.Category] = (cats[r.Category] || 0) + 1; wals[r['Exchange/Wallet Name']] = (wals[r['Exchange/Wallet Name']] || 0) + 1; });
+  const chips = (el, obj, cur, set) => {
+    el.innerHTML = '';
+    const mk = (k, label) => { const c = document.createElement('span'); c.className = 'chip' + (cur === k ? ' on' : ''); c.textContent = label; c.onclick = () => { set(cur === k ? null : k); render(); }; el.appendChild(c); };
+    Object.entries(obj).sort((x, y) => y[1] - x[1]).forEach(([k, v]) => mk(k, `${k} · ${v}`));
+  };
+  chips($('catChips'), cats, fCat, v => fCat = v);
+  chips($('walletChips'), wals, fWal, v => fWal = v);
+  const rows = RESULT.filter(r => (!fCat || r.Category === fCat) && (!fWal || r['Exchange/Wallet Name'] === fWal));
+  $('resTitle').textContent = `Results — ${RESULT.length} rows from ${WALLETS.filter(w => w.wallet !== '—').length} wallet/chain pairs`;
+  $('thead').innerHTML = '<tr>' + COLS.map(c => `<th>${c}</th>`).join('') + '</tr>';
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const show = rows.slice(0, 1000);
+  $('tbody').innerHTML = show.map(r => `<tr class="${r.Category === 'Scam/Spam' ? 'spam' : ''}">` + COLS.map(c => {
+    const v = r[c];
+    if (c === 'Explorer Link') return `<td><a href="${esc(v)}" target="_blank" rel="noopener">open</a></td>`;
+    if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') return `<td title="${esc(v)}">${esc(v ? short(v) : '')}</td>`;
+    if (typeof v === 'number') return `<td class="num">${fmtNum(v)}</td>`;
+    return `<td class="${c === 'Comments' ? 'cm' : ''}">${esc(v)}</td>`;
+  }).join('') + '</tr>').join('');
+  $('tableNote').textContent = rows.length > show.length ? `Showing first ${show.length} of ${rows.length} rows; the Excel file contains all of them.` : '';
+}
+
+/* ---------------- Excel ---------------- */
+function exportXlsx() {
+  const rows = RESULT.filter(r => !($('exSpam').checked && r.Category === 'Scam/Spam')).map(r => { const o = {}; COLS.forEach(c => o[c] = r[c]); return o; });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows, {header: COLS});
+  ws['!cols'] = COLS.map(c => ({wch: {Comments: 90, 'Transaction Hash': 68, 'Liquidity Pool Address': 44, 'Wallet Address': 44, 'Explorer Link': 50, Date: 20, Category: 26}[c] || 15}));
+  ws['!autofilter'] = {ref: ws['!ref']};
+  XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+  const sum = {};
+  rows.forEach(r => { const k = r['Exchange/Wallet Name'] + '|' + r.Category; sum[k] = (sum[k] || 0) + 1; });
+  const sumRows = Object.entries(sum).map(([k, v]) => { const [w, c] = k.split('|'); return {'Exchange/Wallet Name': w, Category: c, Rows: v}; }).sort((x, y) => x['Exchange/Wallet Name'].localeCompare(y['Exchange/Wallet Name']) || y.Rows - x.Rows);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sumRows), 'Summary');
+  const wRows = WALLETS.map(w => ({'Exchange/Wallet Name': w.wallet, Chain: w.chain, 'Wallet Address': w.addr, Rows: w.rows, Notes: w.note}));
+  const wws = XLSX.utils.json_to_sheet(wRows); wws['!cols'] = [{wch: 20}, {wch: 18}, {wch: 44}, {wch: 8}, {wch: 70}];
+  XLSX.utils.book_append_sheet(wb, wws, 'Wallets');
+  const d = new Date(), p = x => String(x).padStart(2, '0');
+  XLSX.writeFile(wb, `crypto-transactions-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}.xlsx`);
+}
+
+/* ---------------- Init ---------------- */
+function saveKeys() {
+  try {
+    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value}));
+    else localStorage.removeItem('evmcls_keys');
+  } catch {}
+}
+(function init() {
+  const groups = [...new Set(ALL_CHAINS.map(c => c.group))];
+  $('chainList').innerHTML = groups.map((g, gi) => `<div class="group">${g} <a data-g="${gi}" data-v="1">all</a><a data-g="${gi}" data-v="0">none</a></div><div class="chains">` +
+    ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}</small></span></label>`).join('') + '</div>').join('');
+  $('chainList').querySelectorAll('a[data-g]').forEach(a => a.onclick = () => $('chainList').querySelectorAll(`input[data-g="${a.dataset.g}"]`).forEach(cb => cb.checked = a.dataset.v === '1'));
+  $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
+  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('remember').checked = true; } } catch {}
+  $('scan').onclick = scan;
+  $('run').onclick = run;
+  $('stop').onclick = () => { STOP = true; };
+  $('xlsx').onclick = exportXlsx;
+  $('remember').onchange = saveKeys;
+  $('testBs').onclick = async () => {
+    const out = $('testBsOut'), key = bsKeyVal();
+    if (!key) { out.textContent = 'Paste a key first.'; return; }
+    saveKeys();
+    if (!(await helperUp())) { out.textContent = NO_HELPER; return; }
+    out.textContent = 'Testing…';
+    const ids = [['Ethereum', 1], ['Base', 8453], ['BNB Chain', 56], ['Gnosis', 100], ['Linea', 59144], ['Avalanche', 43114]];
+    const res = [];
+    for (const [n, id] of ids) {
+      try {
+        const r = await fetch(`${PRO}/v2/api?chain_id=${id}&module=block&action=eth_block_number&apikey=${encodeURIComponent(key)}`);
+        const j = await r.json().catch(() => ({}));
+        res.push(`${n}: ${r.ok && (j.result || j.status === '1') ? '✓' : '✗ ' + (j.error || j.message || r.status)}`);
+      } catch (e) { res.push(`${n}: ✗ ${e.message}`); }
+    }
+    out.textContent = res.join(' · ');
+  };
+  if (typeof XLSX === 'undefined') log('Excel library failed to load (offline?). Fetching still works; reload when online to export.', 'w');
+})();
+</script>
+</body>
+</html>
