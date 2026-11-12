@@ -718,15 +718,25 @@ async function hederaToken(id) {
 const HBAR_NOVAL = {TOKENASSOCIATE: ['Token Association', 'Associated a token with the account'], TOKENDISSOCIATE: ['Token Association', 'Removed a token association'],
   CRYPTOUPDATEACCOUNT: ['Account Update', 'Updated the account (e.g. chose a staking node)'], CONSENSUSSUBMITMESSAGE: ['HCS Message', 'Submitted a consensus message'],
   CRYPTOAPPROVEALLOWANCE: ['Approval', 'Approved a spender allowance'], CRYPTODELETEALLOWANCE: ['Approval', 'Removed an allowance']};
+// The public mirror node only searches ~60 days per request and returns an empty page plus a "next" link
+// for older periods, so we bound the search by the account's creation date and walk back through empty pages.
+async function hederaStart(addr, opt) {
+  let created = 0;
+  try { created = Math.floor(+(await getJSON(`${HEDERA}/api/v1/accounts/${addr}?transactions=false`)).created_timestamp || 0); } catch {}
+  const from = opt?.from ? Math.floor(+opt.from / 1000) : 0;
+  return Math.max(created, from);
+}
 async function fetchHedera(chain, addr, opt) {
-  const all = []; let url = `${HEDERA}/api/v1/transactions?account.id=${addr}&limit=100&order=desc`, cutoff = null;
-  for (let p = 0; p < opt.maxPages * 2 && url; p++) {
-    const j = await getJSON(url); const list = j.transactions || []; all.push(...list);
-    if (!list.length) break;
-    const ts = new Date(+list[list.length - 1].consensus_timestamp * 1000);
-    if (opt.from && ts < opt.from) break;
+  const start = await hederaStart(addr, opt);
+  const all = []; let url = `${HEDERA}/api/v1/transactions?account.id=${addr}&limit=100&order=desc${start ? '&timestamp=gte:' + start : ''}`, cutoff = null;
+  let pages = 0, hops = 0;
+  while (url && pages < opt.maxPages * 2 && hops < 200) {
+    const j = await getJSON(url); const list = j.transactions || []; hops++;
     url = j.links?.next ? HEDERA + j.links.next : '';
-    if (p === opt.maxPages * 2 - 1 && url) cutoff = ts;
+    if (!list.length) { await sleep(80); continue; } // empty 60-day window: keep going back
+    all.push(...list); pages++;
+    const ts = new Date(+list[list.length - 1].consensus_timestamp * 1000);
+    if (pages === opt.maxPages * 2 && url) cutoff = ts;
     await sleep(150);
   }
   const map = new Map();
@@ -1124,8 +1134,11 @@ const NONEVM_CHAINS = [
       try {
         // Accepts 0.0.123 or the account's 0x… EVM address; the result carries the 0.0.x account ID to fetch with.
         const acc = await getJSON(`${HEDERA}/api/v1/accounts/${a}?transactions=false`); const id = acc.account || a;
-        const j = await getJSON(`${HEDERA}/api/v1/transactions?account.id=${id}&limit=1`);
-        return {active: (j.transactions || []).length > 0, count: (j.transactions || []).length ? '✓' : 0, resolved: id, note: id !== a ? 'account ' + id : ''};
+        // Oldest-first from the creation date finds the first transaction without walking empty windows.
+        const created = Math.floor(+acc.created_timestamp || 0);
+        const j = await getJSON(`${HEDERA}/api/v1/transactions?account.id=${id}&limit=1&order=asc${created ? '&timestamp=gte:' + created : ''}`);
+        const found = (j.transactions || []).length > 0 || (+acc.balance?.balance || 0) > 0;
+        return {active: found, count: found ? '✓' : 0, resolved: id, note: id !== a ? 'account ' + id : ''};
       } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; }
     },
     fetch: (a, o) => fetchHedera(NONEVM_BY_ID.hbar, a, o)},

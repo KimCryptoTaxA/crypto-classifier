@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=12"></script>
+<script src="classifier-chains.js?v=14"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -323,9 +323,8 @@ async function fetchBlockscout(chain, addr, opt, usePro) {
 }
 function trimToCutoff(list, cutoff) {
   if (!cutoff) return list;
-  const kept = list.filter(b => b.ts >= cutoff);
-  if (kept.length === list.length) return list;
-  log(`   ⚠ Page limit reached: only transactions from ${fmtDate(cutoff, $('utc').checked)} onward are complete, so ${list.length - kept.length} older ones were left out. Raise "Max pages" (or set a From date) for full history.`, 'w');
+  const kept = list.filter(b => b.ts >= cutoff), dropped = list.length - kept.length;
+  log(`   ⚠ Page limit reached: only transactions from ${fmtDate(cutoff, $('utc').checked)} onward were fetched${dropped ? ` (${dropped} older partial ones were left out)` : ''}. Older history is missing — raise "Max pages", or set From/To dates and run each period separately.`, 'w');
   return kept;
 }
 
