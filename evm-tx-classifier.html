@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=8"></script>
+<script src="classifier-chains.js?v=12"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -74,6 +74,7 @@ code{font-size:12px}
     </div>
     <label class="check"><input type="checkbox" id="utc" checked> Show dates in UTC (untick for your local time zone)</label>
     <label class="check"><input type="checkbox" id="exSpam"> Leave "Scam/Spam" rows out of the Excel file <span class="hint">("Possible Spam (review)" rows are always kept)</span></label>
+    <label class="check"><input type="checkbox" id="inInternal"> Include internal DEX order movements in the Excel file <span class="hint">(XPR: funds sent to / returned from Metal X & Alcor order books — the trades themselves are always included)</span></label>
   </section>
 
   <section class="card">
@@ -817,10 +818,10 @@ async function run() {
             'Type': r.type, 'Category': r.cat,
             'Buy Currency': ccy(r.buy), 'Buy Amount': r.buy ? r.buy.amount : '',
             'Sell Amount': r.sell ? r.sell.amount : '', 'Sell Currency': ccy(r.sell),
-            'Fee Currency': feeHere ? (b.feeCur || chain.native) : '', 'Fee Amount': feeHere ? b.fee : '',
+            'Fee Currency': r.fee ? r.fee.sym : feeHere ? (b.feeCur || chain.native) : '', 'Fee Amount': r.fee ? r.fee.amount : feeHere ? b.fee : '',
             'Exchange/Wallet Name': wname, 'Transaction Hash': b.hash, 'Liquidity Pool Address': r.lp || '',
             'Date': fmtDate(b.ts, utc), 'Comments': r.comment + (extra && i === 0 ? ' ' + extra : ''), 'Chain': chain.name, 'Wallet Address': addr,
-            'Explorer Link': b.url ? b.url : chain.txUrl ? chain.txUrl(b.hash) : (chain.explorer || chain.url) + '/tx/' + b.hash, _ts: +b.ts, _fam: chain.family});
+            'Explorer Link': b.url ? b.url : chain.txUrl ? chain.txUrl(b.hash) : (chain.explorer || chain.url) + '/tx/' + b.hash, _ts: +b.ts, _fam: chain.family, _internal: !!r.internal});
           count++;
         });
       }
@@ -879,7 +880,7 @@ function render() {
   $('thead').innerHTML = '<tr>' + COLS.map(c => `<th>${c}</th>`).join('') + '</tr>';
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
   const show = rows.slice(0, 1000);
-  $('tbody').innerHTML = show.map(r => `<tr class="${r.Category === 'Scam/Spam' ? 'spam' : ''}">` + COLS.map(c => {
+  $('tbody').innerHTML = show.map(r => `<tr class="${r.Category === 'Scam/Spam' || r._internal ? 'spam' : ''}">` + COLS.map(c => {
     const v = r[c];
     if (c === 'Explorer Link') return `<td><a href="${esc(v)}" target="_blank" rel="noopener">open</a></td>`;
     if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') return `<td title="${esc(v)}">${esc(v ? short(v) : '')}</td>`;
@@ -891,7 +892,7 @@ function render() {
 
 /* ---------------- Excel ---------------- */
 function exportXlsx() {
-  const rows = RESULT.filter(r => !($('exSpam').checked && r.Category === 'Scam/Spam')).map(r => { const o = {}; COLS.forEach(c => o[c] = r[c]); return o; });
+  const rows = RESULT.filter(r => !($('exSpam').checked && r.Category === 'Scam/Spam') && !(r._internal && !$('inInternal').checked)).map(r => { const o = {}; COLS.forEach(c => o[c] = r[c]); return o; });
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows, {header: COLS});
   ws['!cols'] = COLS.map(c => ({wch: {Comments: 90, 'Transaction Hash': 68, 'Liquidity Pool Address': 44, 'Wallet Address': 44, 'Explorer Link': 50, Date: 20, Category: 26}[c] || 15}));

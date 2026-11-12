@@ -61,8 +61,7 @@ const COSMOS = [
   {id: 'atom',  dir: 'cosmoshub', hrp: 'cosmos',   name: 'Cosmos Hub', code: 'ATOM',  denom: 'uatom',  dec: 6,  ms: 'cosmos',    ct: 118},
   {id: 'osmo',  dir: 'osmosis',   hrp: 'osmo',     name: 'Osmosis',    code: 'OSMO',  denom: 'uosmo',  dec: 6,  ms: 'osmosis',   ct: 118},
   {id: 'tia',   dir: 'celestia',  hrp: 'celestia', name: 'Celestia',   code: 'TIA',   denom: 'utia',   dec: 6,  ms: 'celestia',  ct: 118},
-  {id: 'inj',   dir: 'injective', hrp: 'inj',      name: 'Injective',  code: 'INJ',   denom: 'inj',    dec: 18, ms: 'injective', ct: 60},
-  {id: 'dydx',  dir: 'dydx',      hrp: 'dydx',     name: 'dYdX Chain', code: 'DYDX',  denom: 'adydx',  dec: 18, ms: 'dydx',      ct: 118},
+  {id: 'inj',   dir: 'injective', hrp: 'inj',      name: 'Injective',  code: 'INJ',   denom: 'inj',    dec: 18, ms: 'injective', ct: 60, evm: true},  {id: 'dydx',  dir: 'dydx',      hrp: 'dydx',     name: 'dYdX Chain', code: 'DYDX',  denom: 'adydx',  dec: 18, ms: 'dydx',      ct: 118},
   {id: 'akt',   dir: 'akash',     hrp: 'akash',    name: 'Akash',      code: 'AKT',   denom: 'uakt',   dec: 6,  ms: 'akash',     ct: 118},
   {id: 'strd',  dir: 'stride',    hrp: 'stride',   name: 'Stride',     code: 'STRD',  denom: 'ustrd',  dec: 6,  ms: 'stride',    ct: 118},
   {id: 'ntrn',  dir: 'neutron',   hrp: 'neutron',  name: 'Neutron',    code: 'NTRN',  denom: 'untrn',  dec: 6,  ms: 'neutron',   ct: 118},
@@ -84,6 +83,7 @@ async function detectAddress(s) {
   if (/^[A-Z2-7]{58}$/.test(s)) return {family: 'algo', addr: s, label: 'Algorand'};
   if (/^f(0\d+|1[a-z2-7]{39}|2[a-z2-7]{39}|3[a-z2-7]{84}|410f[a-z2-7]{39,})$/.test(s)) return {family: 'fil', addr: s, label: 'Filecoin'};
   if (/^(01[0-9a-fA-F]{64}|02[0-9a-fA-F]{66})$/.test(s)) return {family: 'cspr', addr: s.toLowerCase(), label: 'Casper'};
+  if (/^@?[a-z1-5.]{1,12}$/.test(s) && !/\.$/.test(s)) return {family: 'xpr', addr: s.replace(/^@/, ''), label: 'XPR Network account'};
   if (/^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,112}$/.test(s)) return {family: 'btc', addr: s, xpub: true, label: 'Bitcoin ' + s.slice(0, 4)};
   if (/^(addr1|stake1)[0-9a-z]{40,}$/.test(s)) return {family: 'ada', addr: s, label: 'Cardano'};
   if (/^(EQ|UQ|Ef|Uf|kQ|0Q)[A-Za-z0-9_-]{46}$/.test(s) || /^-?[01]:[0-9a-fA-F]{64}$/.test(s)) return {family: 'ton', addr: s, label: 'TON'};
@@ -108,8 +108,12 @@ async function detectAddress(s) {
   return {family: null, addr: s, label: 'Unknown format'};
 }
 // The address to use on a given chain (Cosmos addresses are re-encoded for each coin-type-118 chain).
+// 8-bit bytes -> 5-bit bech32 words
+function toWords(bytes) { let acc = 0, bits = 0; const out = []; for (const b of bytes) { acc = (acc << 8) | b; bits += 8; while (bits >= 5) { bits -= 5; out.push((acc >> bits) & 31); } } if (bits) out.push((acc << (5 - bits)) & 31); return out; }
 function chainAddr(chain, det) {
   if (chain.family === 'hbar' && det.family === 'evm') return det.addr; // Hedera accounts also have a 0x… EVM address
+  // Kava and Injective accounts share their bytes with the 0x… address of the same key
+  if (chain.family === 'cosmos' && chain.evm && det.family === 'evm') return bech32Encode(chain.hrp, toWords(hexToBytes(det.addr.slice(2))));
   if (!det.family || chain.family !== det.family) return null;
   if (det.family !== 'cosmos') return det.addr;
   if (det.hrp === chain.hrp) return det.addr;
@@ -941,6 +945,130 @@ async function fetchCasper(chain, pk, opt) {
   return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
 }
 
+/* ---------- XPR Network (Hyperion history API used by explorer.xprnetwork.org) ---------- */
+const XPR_HYP = 'https://hyp-xpr.api.mainnet.metalx.com';
+const XPR_NAMES = {eosio: 'XPR system (staking/resources)', 'eosio.token': 'XPR token', 'eosio.stake': 'XPR staking', 'eosio.ram': 'XPR RAM', alcor: 'Alcor DEX', dex: 'Metal X DEX',
+  'proton.swaps': 'Proton Swap', 'lending.loan': 'Metal X Lending', 'loan.token': 'LOAN token', xtokens: 'Metal X wrapped tokens (bridge)', 'xmd.token': 'XMD stablecoin',
+  'xmd.treasury': 'XMD treasury', 'yield.farms': 'Metal X yield farms', 'atomicassets': 'AtomicAssets (NFTs)', 'atomicmarket': 'AtomicMarket (NFT market)', 'otc.p': 'OTC', 'proton.wrap': 'Proton bridge (wrap)', 'snipx': 'Snipcoin'};
+const XPR_TRUSTED = new Set(['eosio.token', 'xtokens', 'loan.token', 'xmd.token']); // token contracts with real market prices
+function xprHint(acts) {
+  const names = acts.map(a => a.act.account + ':' + a.act.name).join(' ');
+  if (/eosio:(stakexpr|voteproducer)/.test(names)) return 'stake';
+  if (/eosio:(unstakexpr|refundsxpr)/.test(names)) return 'unstake';
+  if (/eosio:claimvotexpr|claimrewards|yield\.farms:claim|:claim/.test(names)) return 'claimRewards';
+  if (/proton\.swaps:|alcor:swap|:swap|dex:process|dex:placeorder/.test(names)) return 'swap';
+  if (/yield\.farms:(stake|deposit)|addliquidity|:deposit/.test(names)) return 'addLiquidity';
+  if (/yield\.farms:(unstake|withdraw)|removeliquidity|:withdrawall/.test(names)) return 'removeLiquidity';
+  if (/lending\.loan:borrow/.test(names)) return 'borrow';
+  if (/lending\.loan:repay/.test(names)) return 'repay';
+  if (/lending\.loan:/.test(names)) return 'supply';
+  if (/atomicassets:transfer|atomicmarket:/.test(names)) return 'nft';
+  return /:transfer$/.test(names.split(' ')[0]) ? 'transfer' : names.split(' ')[0];
+}
+async function fetchXpr(chain, addr, opt) {
+  const all = []; let cutoff = null;
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await getJSON(`${XPR_HYP}/v2/history/get_actions?account=${addr}&limit=500&skip=${p * 500}&sort=desc${opt.from ? '&after=' + opt.from.toISOString().slice(0, 19) : ''}`);
+    const list = j.actions || []; all.push(...list);
+    if (list.length < 500) break;
+    if (p === opt.maxPages - 1) cutoff = new Date(list[list.length - 1]['@timestamp'] + 'Z');
+    await sleep(250);
+  }
+  const byTx = new Map(), seen = new Set();
+  for (const a of all) { if (seen.has(a.global_sequence)) continue; seen.add(a.global_sequence); (byTx.get(a.trx_id) || byTx.set(a.trx_id, []).get(a.trx_id)).push(a); }
+  const map = new Map();
+  for (const [trx, acts] of byTx) {
+    acts.sort((x, y) => x.global_sequence - y.global_sequence);
+    const b = bucket(map, trx); b.ts = new Date(acts[0]['@timestamp'] + 'Z'); b.ok = true; b.initKnown = true; b.fee = 0;
+    const signer = acts.find(a => (a.act.authorization || []).some(x => x.actor === addr));
+    b.from = signer ? addr : (acts[0].act.authorization?.[0]?.actor || acts[0].act.data?.from || '');
+    b.method = xprHint(acts); b.typesText = [...new Set(acts.map(a => a.act.account + ':' + a.act.name))].join(', ');
+    const memos = [];
+    for (const a of acts) {
+      const d = a.act.data || {};
+      if (a.act.name === 'transfer' && d.quantity && (d.from === addr || d.to === addr) && d.from !== d.to && parseFloat(d.quantity) > 0) {
+        const [amt, sym] = String(d.quantity).split(' '), dir = d.from === addr ? 'out' : 'in', cp = dir === 'out' ? d.to : d.from;
+        if (dir === 'in' && !signer && !b.to) b.to = cp;
+        b.legs.push({dir, amount: +amt, sym, name: '', token: a.act.account + ':' + sym, kind: a.act.account === 'eosio.token' && sym === 'XPR' ? 'native' : 'Token',
+          cp, cpName: XPR_NAMES[cp], priced: XPR_TRUSTED.has(a.act.account) ? true : undefined, spam: false});
+        if (d.memo) memos.push(String(d.memo).slice(0, 50));
+        if (dir === 'out' && !b.to) b.to = cp;
+        if (dir === 'in' && !signer && d.memo && (SPAM_RX.test(d.memo) || /https?:|\.com|\.io|airdrop|claim/i.test(d.memo)) && !XPR_TRUSTED.has(a.act.account)) b.possibleSpam = `unsolicited ${sym} with an advert memo ("${String(d.memo).slice(0, 40)}")`;
+        if (dir === 'in' && !XPR_TRUSTED.has(a.act.account) && sym !== 'XPR' && Object.values(XPR_NAMES).length && ['XPR', 'XUSDC', 'XBTC', 'XETH', 'XMT', 'LOAN', 'XMD'].includes(sym)) { b.flags.push(`fake ${sym} token from contract ${a.act.account} (the real ${sym} is issued by a different contract)`); }
+      } else if (a.act.account === 'atomicassets' && a.act.name === 'transfer' && (d.from === addr || d.to === addr)) {
+        (d.asset_ids || []).forEach(id => b.legs.push({dir: d.from === addr ? 'out' : 'in', amount: 1, sym: 'XPR NFT', name: '', token: 'atomic:' + id, kind: 'NFT', id, cp: d.from === addr ? d.to : d.from}));
+      } else if (!b.to && a.act.account !== 'eosio.token') b.to = a.act.account;
+    }
+    if (!b.to) b.to = acts[0].act.account;
+    b.toName = XPR_NAMES[b.to] || XPR_NAMES[acts[0].act.account] || '';
+    if (memos.length) b.desc = 'memo: ' + memos[0];
+    if (!b.legs.length && signer) {
+      const nv = {stake: 'Staking (Stake / vote)', unstake: 'Staking (Unstake)', claimRewards: 'Staking Rewards (claim)'}[b.method];
+      b.noValue = {cat: nv || (/cancel/.test(b.typesText) ? 'DEX Order Cancelled' : /placeorder|buy|sell/.test(b.typesText) ? 'DEX Order Placed' : 'Contract Interaction'),
+        comment: `${b.typesText} with no token movement for this account. No network fee on XPR.`};
+    }
+  }
+  // Order-book DEX fills (Metal X, Alcor) become Trade rows; the order deposits/refunds to those
+  // contracts are then internal movements, kept out of the Excel file by default.
+  const internal = new Set();
+  const fills = [];
+  try { fills.push(...await xprMetalXTrades(addr, opt)); internal.add('dex'); } catch (e) { log(`   ⚠ Metal X trade history unavailable (${e.message.slice(0, 60)}) — its orders show as deposits/withdrawals`, 'w'); }
+  try { fills.push(...await xprAlcorTrades(addr, opt)); internal.add('alcor'); } catch (e) { log(`   ⚠ Alcor trade history unavailable (${e.message.slice(0, 60)}) — its orders show as deposits/withdrawals`, 'w'); }
+  for (const f of fills) {
+    if (opt.from && f.ts < opt.from) continue;
+    const b = bucket(map, f.key); b.hash = f.trx; b.ts = f.ts; b.ok = true; b.fee = 0; b.from = addr; b.url = 'https://explorer.xprnetwork.org/transaction/' + f.trx;
+    b.preRows = [{type: 'Trade', cat: `DeFi - Swap (${f.dex} order fill)`, buy: {amount: f.buyAmt, sym: f.buySym, kind: 'Token'}, sell: {amount: f.sellAmt, sym: f.sellSym, kind: 'Token'}, lp: '',
+      comment: `${f.dex} order filled: bought ${fmtNum(f.buyAmt)} ${f.buySym} for ${fmtNum(f.sellAmt)} ${f.sellSym} (price ${f.price}, market ${f.market}${f.order ? ', order ' + f.order : ''}).${f.fee ? ` Exchange fee ${fmtNum(f.fee)} ${f.feeSym} is in the Fee column.` : ''}`,
+      fee: f.fee ? {amount: f.fee, sym: f.feeSym} : null}];
+  }
+  for (const b of map.values()) {
+    if (!b.legs.length || !internal.size) continue;
+    const inner = b.legs.filter(l => internal.has(l.cp)); if (!inner.length) continue;
+    b.legs = b.legs.filter(l => !internal.has(l.cp)); b.noValue = null;
+    b.preRows = (b.preRows || []).concat(inner.map(l => ({type: l.dir === 'out' ? 'Withdrawal' : 'Deposit', cat: 'Internal - DEX order funds', buy: l.dir === 'in' ? l : null, sell: l.dir === 'out' ? l : null, lp: '', internal: true,
+      comment: `${l.dir === 'out' ? 'Sent' : 'Got back'} ${legStr(l)} ${l.dir === 'out' ? 'to' : 'from'} ${XPR_NAMES[l.cp] || l.cp} order book (${b.typesText}). The trade itself is recorded from the exchange's fill history, so this row is left out of the Excel file unless you tick "Include internal DEX order movements".`})));
+  }
+  return trimToCutoff([...map.values()], cutoff);
+}
+async function xprMetalXTrades(addr, opt) {
+  const B = 'https://dex.api.mainnet.metalx.com/dex/v1';
+  const mk = Object.fromEntries(((await getJSON(`${B}/markets/all`)).data || []).map(m => [m.market_id, m]));
+  const out = [];
+  for (let p = 0; p < opt.maxPages * 5; p++) {
+    const j = await getJSON(`${B}/trades/history?account=${addr}&limit=100&offset=${p * 100}`); const list = j.data || [];
+    for (const t of list) {
+      const m = mk[t.market_id] || {}, base = m.bid_token?.code || 'BASE', quote = m.ask_token?.code || 'QUOTE', buyer = t.bid_user === addr;
+      // bid side receives the base token (fee taken in base); ask side receives the quote token (fee taken in quote)
+      out.push({key: 'mx:' + t.trade_id, trx: t.trx_id, ts: new Date(t.block_time), dex: 'Metal X DEX', market: m.symbol || t.market_id, price: t.price, order: buyer ? t.bid_user_order_id : t.ask_user_order_id,
+        buySym: buyer ? base : quote, buyAmt: buyer ? t.bid_total : t.ask_total, sellSym: buyer ? quote : base, sellAmt: buyer ? t.ask_total : t.bid_total,
+        fee: buyer ? t.bid_fee : t.ask_fee, feeSym: buyer ? base : quote});
+    }
+    if (list.length < 100 || (p + 1) * 100 >= (j.count || 0)) break;
+    if (opt.from && list.length && new Date(list[list.length - 1].block_time) < opt.from) break;
+    await sleep(200);
+  }
+  return out;
+}
+let ALCOR_MARKETS = null;
+async function xprAlcorTrades(addr, opt) {
+  const B = 'https://proton.alcor.exchange/api';
+  if (!ALCOR_MARKETS) ALCOR_MARKETS = getJSON(`${B}/markets`).then(l => Object.fromEntries((l || []).map(m => [m.id, m])));
+  const mk = await ALCOR_MARKETS, out = [];
+  for (let p = 0; p < opt.maxPages * 5; p++) {
+    const list = await getJSON(`${B}/v2/account/${addr}/deals?limit=100&skip=${p * 100}`);
+    for (const t of list || []) {
+      const m = mk[t.market] || {}, base = m.base_token?.symbol?.name || 'BASE', quote = m.quote_token?.symbol?.name || 'QUOTE', asker = t.asker === addr;
+      // the asker sells the quote token ("ask" amount) for the base token ("bid" amount); the bidder does the opposite
+      out.push({key: 'alcor:' + t._id, trx: t.trx_id, ts: new Date(t.time), dex: 'Alcor DEX', market: `${quote}/${base}`, price: t.unit_price, order: '',
+        buySym: asker ? base : quote, buyAmt: asker ? t.bid : t.ask, sellSym: asker ? quote : base, sellAmt: asker ? t.ask : t.bid, fee: 0, feeSym: ''});
+    }
+    if (!list || list.length < 100) break;
+    if (opt.from && new Date(list[list.length - 1].time) < opt.from) break;
+    await sleep(200);
+  }
+  return out;
+}
+
 /* ---------- XRP names (XRPScan well-known accounts) ---------- */
 let XRP_NAMES = null;
 async function xrpNames() {
@@ -970,7 +1098,7 @@ const NONEVM_CHAINS = [
     txUrl: h => 'https://tronscan.org/#/transaction/' + h,
     scan: async a => { const j = await getJSON(`https://api.trongrid.io/v1/accounts/${a}`); const d = j.data?.[0]; return {active: !!d, count: d ? '✓' : 0, note: d?.create_time ? 'since ' + new Date(d.create_time).toISOString().slice(0, 10) : ''}; },
     fetch: (a, o) => fetchTron(NONEVM_BY_ID.trx, a, o)},
-  ...COSMOS.map(c => ({...c, native: c.sym || c.code, family: 'cosmos', group: 'Cosmos', def: true, label: 'cosmos.directory · free',
+  ...COSMOS.map(c => ({...c, native: c.sym || c.code, family: 'cosmos', group: 'Cosmos', def: true, label: c.evm ? 'cosmos.directory · free (also checks your 0x addresses; native coin only)' : 'cosmos.directory · free',
     txUrl: h => `https://www.mintscan.io/${c.ms}/tx/${h}`,
     scan: async a => { try { await getJSON(`https://rest.cosmos.directory/${c.dir}/cosmos/auth/v1beta1/accounts/${a}`); return {active: true, count: '✓'}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; } },
     fetch: (a, o) => fetchCosmos(NONEVM_BY_ID[c.id], a, o)})),
@@ -1017,6 +1145,16 @@ const NONEVM_CHAINS = [
     txUrl: h => 'https://cspr.live/deploy/' + h,
     scan: async (a, o) => { if (!o.csprKey) return {status: 'needs key', note: 'CSPR.cloud token'}; try { const j = await csprGet(`/accounts/${a}/transfers?page=1&page_size=1`, o.csprKey); const d = await csprGet(`/accounts/${a}/deploys?page=1&page_size=1`, o.csprKey); const n = (j.item_count || 0) + (d.item_count || 0); return {active: n > 0 || (j.data || []).length > 0 || (d.data || []).length > 0, count: n || '✓'}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; } },
     fetch: (a, o) => fetchCasper(NONEVM_BY_ID.cspr, a, o)},
+  {id: 'xpr', name: 'XPR Network', code: 'XPR', native: 'XPR', family: 'xpr', group: 'Other chains', def: true, label: 'XPR Hyperion (explorer.xprnetwork.org) · free',
+    txUrl: h => 'https://explorer.xprnetwork.org/transaction/' + h,
+    scan: async a => {
+      try {
+        await getJSON(`${XPR_HYP}/v2/state/get_account?account=${a}`);
+        const j = await getJSON(`${XPR_HYP}/v2/history/get_actions?account=${a}&limit=1`);
+        const n = j.total?.value || 0; return {active: n > 0, count: n >= 10000 ? '10000+' : n};
+      } catch (e) { if (/HTTP 4|HTTP 5/.test(e.message)) return {active: false, count: 0, note: 'no such account'}; throw e; }
+    },
+    fetch: (a, o) => fetchXpr(NONEVM_BY_ID.xpr, a, o)},
 ];
 const NONEVM_BY_ID = Object.fromEntries(NONEVM_CHAINS.map(c => [c.id, c]));
 
