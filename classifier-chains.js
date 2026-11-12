@@ -1079,6 +1079,68 @@ async function xprAlcorTrades(addr, opt) {
   return out;
 }
 
+/* ---------- Moralis (EVM wallet history, already labelled; needs a Moralis API key) ---------- */
+const MORALIS = 'https://deep-index.moralis.io/api/v2.2';
+const moralisGet = (path, key) => getJSON(MORALIS + path, {headers: {'X-API-Key': key, accept: 'application/json'}});
+const MORALIS_ACTIVE = {};
+// One call lists every chain the wallet has used (cheap compared with one history call per chain).
+function moralisActivity(addr, key, chains) {
+  const k = addr + '|' + chains.join(',');
+  if (!MORALIS_ACTIVE[k]) MORALIS_ACTIVE[k] = moralisGet(`/wallets/${addr}/chains?${chains.map(c => 'chains=' + encodeURIComponent(c)).join('&')}`, key)
+    .then(j => Object.fromEntries((j.active_chains || []).map(c => [c.chain, c])));
+  return MORALIS_ACTIVE[k];
+}
+const MORALIS_HINT = {'token swap': 'swap', 'deposit': 'deposit', 'withdraw': 'withdraw', 'borrow': 'borrow', 'approve': 'approve', 'revoke': 'approve (revoke)',
+  'airdrop': 'claim airdrop', 'mint': 'mint', 'burn': 'burn', 'nft purchase': 'buy nft', 'nft sale': 'sell nft', 'send': 'transfer', 'receive': 'transfer',
+  'token send': 'transfer', 'token receive': 'transfer', 'nft send': 'transfer', 'nft receive': 'transfer'};
+async function fetchMoralis(chain, addr, opt) {
+  const a = lc(addr), map = new Map(); let cursor = '', cutoff = null;
+  const range = (opt.from ? '&from_date=' + encodeURIComponent(opt.from.toISOString()) : '') + (opt.to ? '&to_date=' + encodeURIComponent(opt.to.toISOString()) : '');
+  const all = [];
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await moralisGet(`/wallets/${addr}/history?chain=${encodeURIComponent(chain.moralis)}&order=DESC&limit=100${range}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`, opt.moralisKey);
+    const list = j.result || []; all.push(...list); cursor = j.cursor;
+    if (!cursor || !list.length) break;
+    if (p === opt.maxPages - 1) cutoff = new Date(list[list.length - 1].block_timestamp);
+    await sleep(120);
+  }
+  const yes = v => v === true || v === 'true';
+  const name = (x, side) => x[side + '_address_entity'] || x[side + '_address_label'] || '';
+  for (const t of all) {
+    const b = bucket(map, t.hash);
+    b.ts = new Date(t.block_timestamp); b.ok = String(t.receipt_status) !== '0'; b.initKnown = true;
+    b.from = lc(t.from_address); b.to = lc(t.to_address); b.toName = name(t, b.from === a ? 'to' : 'from');
+    const cat = String(t.category || '').toLowerCase();
+    b.method = [MORALIS_HINT[cat] || cat, t.method_label].filter(Boolean).join(' / ');
+    b.fee = b.from === a ? +t.transaction_fee || 0 : 0;
+    if (t.summary || cat) b.desc = `Moralis: ${cat || '?'}${t.summary ? ' – ' + t.summary : ''}`;
+    if (yes(t.possible_spam)) b.flags.push('Moralis marks this transaction as possible spam');
+    if (!b.ok) continue;
+    for (const n of t.native_transfers || []) {
+      const f = lc(n.from_address), to = lc(n.to_address); if (f === to) continue;
+      const dir = f === a ? 'out' : to === a ? 'in' : null; if (!dir) continue;
+      b.legs.push({...natLeg(chain, dir, +n.value_formatted || units(n.value, 18), dir === 'out' ? to : f), cpName: name(n, dir === 'out' ? 'to' : 'from')});
+    }
+    for (const x of t.erc20_transfers || []) {
+      const f = lc(x.from_address), to = lc(x.to_address); if (f === to) continue;
+      const dir = f === a ? 'out' : to === a ? 'in' : null; if (!dir) continue;
+      b.legs.push({dir, amount: x.value_formatted != null ? +x.value_formatted : units(x.value, x.token_decimals), sym: x.token_symbol || x.token_name || short(x.address), name: x.token_name || '',
+        token: lc(x.address), kind: 'ERC-20', cp: dir === 'out' ? to : f, cpName: name(x, dir === 'out' ? 'to' : 'from'),
+        spam: yes(x.possible_spam), priced: yes(x.verified_contract) ? true : undefined, fromZero: f === ZERO, toZero: to === ZERO || to === DEAD});
+    }
+    for (const x of t.nft_transfers || []) {
+      const f = lc(x.from_address), to = lc(x.to_address); if (f === to) continue;
+      const dir = f === a ? 'out' : to === a ? 'in' : null; if (!dir) continue;
+      const kind = /1155/.test(x.contract_type || '') ? 'ERC-1155' : 'ERC-721';
+      b.legs.push({dir, amount: kind === 'ERC-1155' ? +x.amount || 1 : 1, sym: x.token_symbol || x.token_name || x.normalized_metadata?.name || short(x.token_address), name: x.token_name || '',
+        token: lc(x.token_address), kind, id: x.token_id, cp: dir === 'out' ? to : f, cpName: name(x, dir === 'out' ? 'to' : 'from'),
+        spam: yes(x.possible_spam), fromZero: f === ZERO, toZero: to === ZERO || to === DEAD});
+    }
+    if (!b.legs.length && b.from === a && /approve/.test(b.method)) b.noValue = {cat: 'Approval', comment: `Token approval/revoke${b.toName ? ' on ' + b.toName : ''}. Gas fee only.`};
+  }
+  return trimToCutoff([...map.values()], cutoff);
+}
+
 /* ---------- XRP names (XRPScan well-known accounts) ---------- */
 let XRP_NAMES = null;
 async function xrpNames() {

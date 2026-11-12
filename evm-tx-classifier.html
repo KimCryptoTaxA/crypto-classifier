@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=14"></script>
+<script src="classifier-chains.js?v=15"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -88,6 +88,8 @@ code{font-size:12px}
 
   <section class="card">
     <h2>3. API keys <span class="hint">(optional — each unlocks specific chains/explorers)</span></h2>
+    <label>Moralis API key <span class="hint">— free or paid at moralis.com; when entered, all Moralis EVM chains use it (labelled history incl. BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad…)</span></label>
+    <input type="password" id="moralisKey" autocomplete="off">
     <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
     <input type="password" id="heliusKey" autocomplete="off">
     <div class="row">
@@ -103,7 +105,7 @@ code{font-size:12px}
     <label>DeBank Cloud AccessKey <span class="hint">— pay-per-use; used for BNB Chain/Gnosis/Linea when Etherscan can't</span></label>
     <input type="password" id="dbKey" autocomplete="off">
     <label class="check"><input type="checkbox" id="remember"> Remember keys in this browser</label>
-    <p class="hint">Each key is sent only to its own service (helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Bitcoin xpub/zpub and Cardano need the local helper: run <code>python3 start-classifier.py</code>.</p>
+    <p class="hint">Each key is sent only to its own service (moralis, helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Bitcoin xpub/zpub and Cardano need the local helper: run <code>python3 start-classifier.py</code>.</p>
     <button type="button" class="sec" id="testBs" style="margin-top:8px">Test Blockscout key</button> <span id="testBsOut" class="hint"></span>
   </section>
 
@@ -136,6 +138,8 @@ code{font-size:12px}
 
 <script>
 /* ---------------- Config ---------------- */
+// Moralis chain names for chains that also have another source; with a Moralis key these use Moralis first.
+const MORALIS_IDS = {eth: 'eth', base: 'base', op: 'optimism', arb: 'arbitrum', pol: 'polygon', avax: 'avalanche', bsc: 'bsc', gno: 'gnosis', linea: 'linea'};
 const CHAINS = [
   {id:'eth',    name:'Ethereum',         code:'ETH',    native:'ETH',  src:'blockscout', chainid:1,      url:'https://eth.blockscout.com',      def:true},
   {id:'base',   name:'Base',             code:'BASE',   native:'ETH',  src:'blockscout', chainid:8453,   url:'https://base.blockscout.com',     def:true},
@@ -164,8 +168,16 @@ const CHAINS = [
   {id:'xdc',    name:'XDC Network',      code:'XDC',    native:'XDC',  src:'keyed', chainid:50,  debank:'xdc', explorer:'https://xdcscan.com', def:true, label:'needs free Etherscan key'},
   {id:'filevm', name:'Filecoin EVM',     code:'FILEVM', native:'FIL',  src:'blockscout', chainid:314,  url:'https://filecoin.blockscout.com', def:true},
   {id:'iotaevm',name:'IOTA EVM',         code:'IOTAEVM',native:'IOTA', src:'blockscout', chainid:8822, url:'https://explorer.evm.iota.org',   def:true},
-].map(c => ({...c, family: 'evm', group: 'EVM chains', txUrl: c.txUrl || (h => (c.explorer || c.url) + '/tx/' + h)}));
-const SRC_LABEL = {blockscout:'Blockscout · free', routescan:'Routescan · free', keyed:'needs Etherscan or DeBank key', gno:'free with Blockscout PRO key, or Etherscan/DeBank key'};
+  // Only available through Moralis (needs a Moralis API key)
+  {id:'cronos', name:'Cronos',           code:'CRO',    native:'CRO',  src:'moralis', chainid:25,    moralis:'cronos',  explorer:'https://explorer.cronos.org', def:true},
+  {id:'chiliz', name:'Chiliz',           code:'CHZ',    native:'CHZ',  src:'moralis', chainid:88888, moralis:'chiliz',  explorer:'https://chiliscan.com', def:true},
+  {id:'flow',   name:'Flow EVM',         code:'FLOW',   native:'FLOW', src:'moralis', chainid:747,   moralis:'flow',    explorer:'https://evm.flowscan.io', def:true},
+  {id:'ronin',  name:'Ronin',            code:'RON',    native:'RON',  src:'moralis', chainid:2020,  moralis:'ronin',   explorer:'https://app.roninchain.com', def:true},
+  {id:'pulse',  name:'PulseChain',       code:'PLS',    native:'PLS',  src:'moralis', chainid:369,   moralis:'pulse',   explorer:'https://scan.pulsechain.com', def:true},
+  {id:'seievm', name:'Sei EVM',          code:'SEIEVM', native:'SEI',  src:'moralis', chainid:1329,  moralis:'sei',     explorer:'https://seitrace.com', def:true},
+  {id:'monad',  name:'Monad',            code:'MON',    native:'MON',  src:'moralis', chainid:143,   moralis:'monad',   explorer:'https://monadscan.com', def:true},
+].map(c => ({...c, moralis: c.moralis || MORALIS_IDS[c.id], family: 'evm', group: 'EVM chains', txUrl: c.txUrl || (h => (c.explorer || c.url) + '/tx/' + h)}));
+const SRC_LABEL = {blockscout:'Blockscout · free', routescan:'Routescan · free', keyed:'needs Etherscan or DeBank key', gno:'free with Blockscout PRO key, or Etherscan/DeBank key', moralis:'needs Moralis key'};
 const ALL_CHAINS = [...CHAINS, ...NONEVM_CHAINS];
 const COLS = ['Type','Category','Buy Currency','Buy Amount','Sell Amount','Sell Currency','Fee Currency','Fee Amount',
   'Exchange/Wallet Name','Transaction Hash','Liquidity Pool Address','Date','Comments','Chain','Wallet Address','Explorer Link'];
@@ -418,6 +430,16 @@ async function fetchDebank(chain, addr, opt, key) {
 
 /* ---------------- Source routing ---------------- */
 async function fetchChain(chain, addr, opt) {
+  // With a Moralis key, every chain Moralis covers uses it first; other sources stay as the backup.
+  if (opt.moralisKey && chain.moralis && !chain._moralisFail) {
+    try { return {txs: await fetchMoralis(chain, addr, opt), via: 'Moralis'}; }
+    catch (e) {
+      if (e.message === 'Stopped' || chain.src === 'moralis') throw e;
+      chain._moralisFail = true;
+      log(`   Moralis failed for ${chain.name} (${e.message.slice(0, 90)}) → using the next source`, 'w');
+    }
+  }
+  if (chain.src === 'moralis') throw new Error('Paste a Moralis API key to use ' + chain.name);
   // Try Blockscout PRO first when a key is set; if your plan doesn't cover the chain, fall back (remembered per chain).
   const pro = bsKeyVal() && chain.chainid && HELPER && !chain._proFail;
   if (pro) {
@@ -666,7 +688,7 @@ function selectedChains() {
 }
 function getOpt() {
   return {maxPages: Math.max(1, +$('maxPages').value || 40), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
-    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(),
+    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(),
     from: $('dFrom').value ? new Date($('dFrom').value + 'T00:00:00Z') : null, to: $('dTo').value ? new Date($('dTo').value + 'T23:59:59Z') : null};
 }
 
@@ -690,6 +712,16 @@ async function bsActivity(base, keyQ, addr) {
   return {active: false, count: 0};
 }
 async function scanEvm(chain, addr, opt) {
+  if (opt.moralisKey && chain.moralis) {
+    try {
+      // One Moralis call per address answers for every Moralis chain at once.
+      const ids = CHAINS.filter(c => c.moralis).map(c => c.moralis);
+      const act = await moralisActivity(addr, opt.moralisKey, [...new Set(ids)]);
+      const c = act[chain.moralis];
+      return c ? {active: true, count: '✓', note: c.first_transaction ? 'since ' + String(c.first_transaction.block_timestamp).slice(0, 10) + ' (Moralis)' : 'Moralis'} : {active: false, count: 0};
+    } catch (e) { if (chain.src === 'moralis') throw e; /* fall through to the free sources */ }
+  }
+  if (chain.src === 'moralis') return {status: 'needs key', note: 'Moralis key'};
   const proBase = opt.bs && HELPER && chain.chainid ? `${PRO}/${chain.chainid}` : null, proQ = proBase ? `?apikey=${encodeURIComponent(opt.bs)}` : '';
   const bs = (base, q) => bsActivity(base, q, addr);
   if (chain.src === 'blockscout') {
@@ -794,7 +826,7 @@ async function run() {
       const wname = `${chain.code}_${counters[chain.id]}`; jobs.push({chain, addr: x.addr, input: e.input, wname}); ownAddrs.set(x.addr, wname);
     }
   }
-  CHAINS.forEach(c => delete c._proFail);
+  CHAINS.forEach(c => { delete c._proFail; delete c._moralisFail; });
   try {
     for (const job of jobs) {
       if (STOP) throw new Error('Stopped');
@@ -911,17 +943,17 @@ function exportXlsx() {
 /* ---------------- Init ---------------- */
 function saveKeys() {
   try {
-    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value}));
+    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value}));
     else localStorage.removeItem('evmcls_keys');
   } catch {}
 }
 (function init() {
   const groups = [...new Set(ALL_CHAINS.map(c => c.group))];
   $('chainList').innerHTML = groups.map((g, gi) => `<div class="group">${g} <a data-g="${gi}" data-v="1">all</a><a data-g="${gi}" data-v="0">none</a></div><div class="chains">` +
-    ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}</small></span></label>`).join('') + '</div>').join('');
+    ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}${c.moralis && c.src !== 'moralis' ? ' · Moralis when key entered' : ''}</small></span></label>`).join('') + '</div>').join('');
   $('chainList').querySelectorAll('a[data-g]').forEach(a => a.onclick = () => $('chainList').querySelectorAll(`input[data-g="${a.dataset.g}"]`).forEach(cb => cb.checked = a.dataset.v === '1'));
   $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
-  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('remember').checked = true; } } catch {}
+  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('remember').checked = true; } } catch {}
   $('scan').onclick = scan;
   $('run').onclick = run;
   $('stop').onclick = () => { STOP = true; };
