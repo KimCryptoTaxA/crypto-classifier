@@ -80,7 +80,7 @@ async function detectAddress(s) {
   if (/^xdc[0-9a-fA-F]{40}$/i.test(s)) return {family: 'evm', addr: '0x' + s.slice(3).toLowerCase(), label: 'EVM (XDC address)'};
   if (/^0x[0-9a-fA-F]{64}$/.test(s)) return {family: 'iota', addr: s.toLowerCase(), label: 'IOTA'};
   if (/^G[A-Z2-7]{55}$/.test(s)) return {family: 'xlm', addr: s, label: 'Stellar'};
-  if (/^0\.0\.\d+$/.test(s)) return {family: 'hbar', addr: s, label: 'Hedera'};
+  if (/^0\.0\.\d+(-[a-z]{5})?$/i.test(s)) return {family: 'hbar', addr: s.split('-')[0], label: 'Hedera'};
   if (/^[A-Z2-7]{58}$/.test(s)) return {family: 'algo', addr: s, label: 'Algorand'};
   if (/^f(0\d+|1[a-z2-7]{39}|2[a-z2-7]{39}|3[a-z2-7]{84}|410f[a-z2-7]{39,})$/.test(s)) return {family: 'fil', addr: s, label: 'Filecoin'};
   if (/^(01[0-9a-fA-F]{64}|02[0-9a-fA-F]{66})$/.test(s)) return {family: 'cspr', addr: s.toLowerCase(), label: 'Casper'};
@@ -109,6 +109,7 @@ async function detectAddress(s) {
 }
 // The address to use on a given chain (Cosmos addresses are re-encoded for each coin-type-118 chain).
 function chainAddr(chain, det) {
+  if (chain.family === 'hbar' && det.family === 'evm') return det.addr; // Hedera accounts also have a 0x… EVM address
   if (!det.family || chain.family !== det.family) return null;
   if (det.family !== 'cosmos') return det.addr;
   if (det.hrp === chain.hrp) return det.addr;
@@ -991,7 +992,14 @@ const NONEVM_CHAINS = [
     fetch: (a, o) => fetchStellar(NONEVM_BY_ID.xlm, a, o)},
   {id: 'hbar', name: 'Hedera', code: 'HBAR', native: 'HBAR', family: 'hbar', group: 'Other chains', def: true, label: 'Hedera Mirror Node · free',
     txUrl: h => 'https://hashscan.io/mainnet/transaction/' + h,
-    scan: async a => { try { await getJSON(`${HEDERA}/api/v1/accounts/${a}`); const j = await getJSON(`${HEDERA}/api/v1/transactions?account.id=${a}&limit=1`); return {active: (j.transactions || []).length > 0, count: (j.transactions || []).length ? '✓' : 0}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; } },
+    scan: async a => {
+      try {
+        // Accepts 0.0.123 or the account's 0x… EVM address; the result carries the 0.0.x account ID to fetch with.
+        const acc = await getJSON(`${HEDERA}/api/v1/accounts/${a}?transactions=false`); const id = acc.account || a;
+        const j = await getJSON(`${HEDERA}/api/v1/transactions?account.id=${id}&limit=1`);
+        return {active: (j.transactions || []).length > 0, count: (j.transactions || []).length ? '✓' : 0, resolved: id, note: id !== a ? 'account ' + id : ''};
+      } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; }
+    },
     fetch: (a, o) => fetchHedera(NONEVM_BY_ID.hbar, a, o)},
   {id: 'algo', name: 'Algorand', code: 'ALGO', native: 'ALGO', family: 'algo', group: 'Other chains', def: true, label: 'Nodely indexer · free',
     txUrl: h => 'https://allo.info/tx/' + h,
