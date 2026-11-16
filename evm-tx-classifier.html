@@ -55,6 +55,19 @@ a{color:var(--acc)}
 .pill{display:flex;gap:6px;align-items:center;font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);font-weight:400;margin:0}
 .pill.on{border-color:var(--ok)}.pill.off{opacity:.55}.pill.err{border-color:var(--bad)}.pill.key{border-color:var(--warn)}
 code{font-size:12px}
+details.guide{background:var(--card);border:1px solid var(--line);border-radius:10px;margin:0 0 18px}
+details.guide>summary{cursor:pointer;padding:12px 16px;font-weight:600;color:var(--acc);list-style:none;display:flex;align-items:center;gap:8px}
+details.guide>summary::-webkit-details-marker{display:none}
+details.guide>summary::before{content:"▸";transition:transform .15s}
+details.guide[open]>summary::before{transform:rotate(90deg)}
+details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:8px}
+.guide-body{padding:0 16px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px 28px}
+.guide-body>div{min-width:0}
+.guide-body h3{font-size:14px;margin:6px 0 8px}
+.guide-body ol,.guide-body ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.guide-body p{margin:0 0 6px;font-size:13.5px}
+.guide-body .gw{grid-column:1/-1;border-left:3px solid var(--warn);padding:8px 12px;font-size:13px;background:var(--bg);border-radius:0 6px 6px 0}
+@media (prefers-reduced-motion:reduce){details.guide>summary::before{transition:none}}
 </style>
 </head>
 <body>
@@ -62,10 +75,50 @@ code{font-size:12px}
 <h1>Crypto Transaction Classifier</h1>
 <p class="sub">Checks which blockchains your wallets are active on, pulls their history live from block explorers, classifies each transaction (DeFi, swap, NFT, bridge, staking, transfer, scam/spam), and exports a CoinTracking-style Excel file.</p>
 
+<details class="guide" id="guide">
+  <summary>How to use this tool — steps, what you get, limitations</summary>
+  <div class="guide-body">
+    <div>
+      <h3>Steps</h3>
+      <ol>
+        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper). Tick “Remember keys”. Never share your keys.</li>
+        <li><b>Paste wallet addresses</b> in section 1, one per line, any chains mixed. Optional: From/To dates (e.g. one tax year).</li>
+        <li><b>Click ① Scan.</b> Each address shows its chains: ✓ active, — none, ⚠ error, 🔑 needs a key. Untick what you don't want.</li>
+        <li><b>Click ② Fetch &amp; classify ticked.</b> Big wallets take a few minutes. If the log says “Page limit reached”, raise <i>Max pages per list</i> or run one date range at a time.</li>
+        <li><b>Review</b> using the category chips above the table. Check “Possible Spam (review)” rows and comments with “Review” or “WARNING”.</li>
+        <li><b>Click Download Excel (.xlsx)</b> and import the Transactions sheet into CoinTracking.</li>
+      </ol>
+    </div>
+    <div>
+      <h3>What you get</h3>
+      <ul>
+        <li><b>Type</b> (CoinTracking: Trade, Deposit, Withdrawal, Staking, Airdrop, Reward / Bonus, Other Fee) and <b>Category</b> (Swap, Liquidity Pool, Lending, Staking, Bridge, NFT, Transfer, Scam/Spam…)</li>
+        <li>Buy / Sell / Fee currency and amount, Transaction Hash, Liquidity Pool Address, Date (mm-dd-yyyy hh:mm:ss, UTC by default)</li>
+        <li><b>Exchange/Wallet Name</b>: chain code + last 6 characters of the address, e.g. <code>ETH_518dda</code></li>
+        <li>Plain-language Comments, Chain, Wallet Address and an Explorer Link for every row; plus Summary and Wallets sheets</li>
+        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Limitations</h3>
+      <ul>
+        <li>Best-effort classification from on-chain data, not tax advice. Review before filing.</li>
+        <li>No USD prices: CoinTracking adds them on import.</li>
+        <li>Bridges appear as two rows, one on each chain.</li>
+        <li>Very active wallets may hit the page limit; the log warns you.</li>
+        <li>Kava isn't supported. Solana, Casper, BNB Chain and the Moralis-only chains need a key.</li>
+        <li>Bitcoin xpub/zpub, Cardano, Casper and the Blockscout PRO key need the Crypto Validation Database or the Mac helper.</li>
+        <li>Free API limits apply per key, so use your own.</li>
+      </ul>
+    </div>
+    <p class="gw"><b>Privacy:</b> wallet addresses and keys stay in your browser and go only to the blockchain data services. Nothing is saved anywhere else.</p>
+  </div>
+</details>
+
 <div class="grid">
   <section class="card">
     <h2>1. Wallets</h2>
-    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge). Numbered _1, _2 … in this order.</span></label>
+    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
@@ -817,13 +870,18 @@ async function run() {
   STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false; $('xlsx').disabled = true;
   RESULT = []; WALLETS = [];
   const utc = $('utc').checked;
-  const counters = {}, ownAddrs = new Map();
-  // wallet names: per chain, numbered in the order the addresses were entered
+  const ownAddrs = new Map(), usedNames = new Set();
+  // Wallet names: chain code + "_" + the last 6 characters of the address used on that chain, e.g. ETH_d18dda.
+  // (If two addresses on one chain share their last 6 characters, the second gets "-2".)
+  const walletName = (chain, addr) => {
+    let n = `${chain.code}_${String(addr).slice(-6)}`;
+    for (let k = 2; usedNames.has(n); k++) n = `${chain.code}_${String(addr).slice(-6)}-${k}`;
+    usedNames.add(n); return n;
+  };
   const jobs = [];
   for (const chain of ALL_CHAINS.concat(selectedChains().filter(c => c.id.startsWith('c_')))) {
     for (const e of SCAN) for (const x of e.items) if (x.sel && x.chain.id === chain.id && !jobs.some(j => j.chain.id === chain.id && j.addr === x.addr)) {
-      counters[chain.id] = (counters[chain.id] || 0) + 1;
-      const wname = `${chain.code}_${counters[chain.id]}`; jobs.push({chain, addr: x.addr, input: e.input, wname}); ownAddrs.set(x.addr, wname);
+      const wname = walletName(chain, x.addr); jobs.push({chain, addr: x.addr, input: e.input, wname}); ownAddrs.set(x.addr, wname);
     }
   }
   CHAINS.forEach(c => { delete c._proFail; delete c._moralisFail; });
