@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=15"></script>
+<script src="classifier-chains.js?v=16"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -106,7 +106,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>No USD prices: CoinTracking adds them on import.</li>
         <li>Bridges appear as two rows, one on each chain.</li>
         <li>Very active wallets may hit the page limit; the log warns you.</li>
-        <li>Kava isn't supported. Solana, Casper, BNB Chain and the Moralis-only chains need a key.</li>
+        <li>Kava isn't supported. Solana, Casper, Bittensor, BNB Chain and the Moralis-only chains need a key.</li>
         <li>Bitcoin xpub/zpub, Cardano, Casper and the Blockscout PRO key need the Crypto Validation Database or the Mac helper.</li>
         <li>Free API limits apply per key, so use your own.</li>
       </ul>
@@ -118,7 +118,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 <div class="grid">
   <section class="card">
     <h2>1. Wallets</h2>
-    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
+    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
@@ -143,6 +143,8 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <h2>3. API keys <span class="hint">(optional — each unlocks specific chains/explorers)</span></h2>
     <label>Moralis API key <span class="hint">— free or paid at moralis.com; when entered, all Moralis EVM chains use it (labelled history incl. BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad…)</span></label>
     <input type="password" id="moralisKey" autocomplete="off">
+    <label>Taostats API key <span class="hint">— free tier at taostats.io (dash.taostats.io); needed for Bittensor (TAO)</span></label>
+    <input type="password" id="taostatsKey" autocomplete="off">
     <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
     <input type="password" id="heliusKey" autocomplete="off">
     <div class="row">
@@ -158,7 +160,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <label>DeBank Cloud AccessKey <span class="hint">— pay-per-use; used for BNB Chain/Gnosis/Linea when Etherscan can't</span></label>
     <input type="password" id="dbKey" autocomplete="off">
     <label class="check"><input type="checkbox" id="remember"> Remember keys in this browser</label>
-    <p class="hint">Each key is sent only to its own service (moralis, helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Bitcoin xpub/zpub and Cardano need the local helper: run <code>python3 start-classifier.py</code>.</p>
+    <p class="hint">Each key is sent only to its own service (moralis, taostats, helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Bitcoin xpub/zpub and Cardano need the local helper: run <code>python3 start-classifier.py</code>.</p>
     <button type="button" class="sec" id="testBs" style="margin-top:8px">Test Blockscout key</button> <span id="testBsOut" class="hint"></span>
   </section>
 
@@ -283,7 +285,9 @@ function bucket(map, hash) {
   if (!map.has(hash)) map.set(hash, {hash, ts: null, from: '', to: '', toName: '', method: '', ok: true, fee: 0, legs: [], initKnown: false, flags: []});
   return map.get(hash);
 }
-function natLeg(chain, dir, amount, cp) { return {dir, amount, sym: chain.native, name: chain.native, token: 'native', kind: 'native', id: null, cp: lc(cp), spam: false}; }
+// Only 0x… (EVM) addresses are case-insensitive; Solana, Tron, XRP, Stellar, Bittensor etc. must keep their case.
+const normCp = cp => /^0x[0-9a-fA-F]+$/.test(cp || '') ? lc(cp) : (cp || '');
+function natLeg(chain, dir, amount, cp) { return {dir, amount, sym: chain.native, name: chain.native, token: 'native', kind: 'native', id: null, cp: normCp(cp), spam: false}; }
 
 /* ---------------- Source: Blockscout v2 ---------------- */
 // With a Blockscout PRO key, use the multichain API (api.blockscout.com) — the key is only ever sent there.
@@ -741,7 +745,7 @@ function selectedChains() {
 }
 function getOpt() {
   return {maxPages: Math.max(1, +$('maxPages').value || 40), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
-    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(),
+    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(), taostatsKey: $('taostatsKey').value.trim(),
     from: $('dFrom').value ? new Date($('dFrom').value + 'T00:00:00Z') : null, to: $('dTo').value ? new Date($('dTo').value + 'T23:59:59Z') : null};
 }
 
@@ -1001,7 +1005,7 @@ function exportXlsx() {
 /* ---------------- Init ---------------- */
 function saveKeys() {
   try {
-    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value}));
+    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value, ts: $('taostatsKey').value}));
     else localStorage.removeItem('evmcls_keys');
   } catch {}
 }
@@ -1011,7 +1015,7 @@ function saveKeys() {
     ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}${c.moralis && c.src !== 'moralis' ? ' · Moralis when key entered' : ''}</small></span></label>`).join('') + '</div>').join('');
   $('chainList').querySelectorAll('a[data-g]').forEach(a => a.onclick = () => $('chainList').querySelectorAll(`input[data-g="${a.dataset.g}"]`).forEach(cb => cb.checked = a.dataset.v === '1'));
   $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
-  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('remember').checked = true; } } catch {}
+  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('remember').checked = true; } } catch {}
   $('scan').onclick = scan;
   $('run').onclick = run;
   $('stop').onclick = () => { STOP = true; };

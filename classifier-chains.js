@@ -83,6 +83,8 @@ async function detectAddress(s) {
   if (/^[A-Z2-7]{58}$/.test(s)) return {family: 'algo', addr: s, label: 'Algorand'};
   if (/^f(0\d+|1[a-z2-7]{39}|2[a-z2-7]{39}|3[a-z2-7]{84}|410f[a-z2-7]{39,})$/.test(s)) return {family: 'fil', addr: s, label: 'Filecoin'};
   if (/^(01[0-9a-fA-F]{64}|02[0-9a-fA-F]{66})$/.test(s)) return {family: 'cspr', addr: s.toLowerCase(), label: 'Casper'};
+  // Bittensor uses Substrate SS58 addresses with the generic prefix 42: 48 characters starting with 5
+  if (/^5[1-9A-HJ-NP-Za-km-z]{47}$/.test(s)) { const d = b58decode(s); if (d && d.length === 35 && d[0] === 42) return {family: 'tao', addr: s, label: 'Bittensor (SS58)'}; }
   if (/^@?[a-z1-5.]{1,12}$/.test(s) && !/\.$/.test(s)) return {family: 'xpr', addr: s.replace(/^@/, ''), label: 'XPR Network account'};
   if (/^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,112}$/.test(s)) return {family: 'btc', addr: s, xpub: true, label: 'Bitcoin ' + s.slice(0, 4)};
   if (/^(addr1|stake1)[0-9a-z]{40,}$/.test(s)) return {family: 'ada', addr: s, label: 'Cardano'};
@@ -1141,6 +1143,72 @@ async function fetchMoralis(chain, addr, opt) {
   return trimToCutoff([...map.values()], cutoff);
 }
 
+/* ---------- Bittensor / TAO (Taostats API; needs a Taostats API key) ---------- */
+const TAOSTATS = 'https://api.taostats.io/v1';
+const taoGet = (path, key) => getJSON(TAOSTATS + path, {headers: {Authorization: key, accept: 'application/json'}});
+const rao = v => units(String(v || '0'), 9);
+async function taoPages(path, key, opt) {
+  const out = []; let cutoff = null;
+  const range = (opt.from ? '&timestamp_start=' + Math.floor(+opt.from / 1000) : '') + (opt.to ? '&timestamp_end=' + Math.floor(+opt.to / 1000) : '');
+  for (let p = 1; p <= opt.maxPages; p++) {
+    const j = await taoGet(`${path}${path.includes('?') ? '&' : '?'}limit=200&page=${p}&order_by=timestamp&order_dir=desc${range}`, key);
+    const list = j.data || []; out.push(...list);
+    if (!j.pagination?.next_page || !list.length) break;
+    if (p === opt.maxPages) cutoff = new Date(list[list.length - 1].timestamp);
+    await sleep(300);
+  }
+  return {list: out, cutoff};
+}
+async function fetchTao(chain, addr, opt) {
+  const key = opt.taostatsKey; if (!key) throw new Error('paste a Taostats API key (taostats.io) to use Bittensor');
+  const map = new Map(); let cutoff = null;
+  const take = c => { if (c && (!cutoff || c > cutoff)) cutoff = c; };
+  const txKey = x => x.extrinsic_id || x.transaction_hash || x.id;
+  // 1) TAO transfers
+  const tr = await taoPages(`/transfers?network=finney&address=${addr}`, key, opt); take(tr.cutoff);
+  for (const t of tr.list) {
+    const b = bucket(map, txKey(t)); b.ts = new Date(t.timestamp); b.ok = true; b.initKnown = true; b.method = 'transfer';
+    b.url = t.extrinsic_id ? `https://taostats.io/extrinsic/${t.extrinsic_id}` : '';
+    if (t.from === t.to) continue;
+    if (t.from === addr) { b.from = addr; b.to = t.to; if (!b.feeSet) { b.fee = rao(t.fee); b.feeSet = true; } b.legs.push(natLeg(chain, 'out', rao(t.amount), t.to)); }
+    else if (t.to === addr) { if (!b.from) b.from = t.from; b.legs.push(natLeg(chain, 'in', rao(t.amount), t.from)); }
+  }
+  // 2) dTAO-era staking: staking into a subnet swaps TAO for that subnet's alpha (a trade); root (netuid 0) keeps TAO
+  const se = await taoPages(`/subnets/stake-events?coldkey=${addr}`, key, opt); take(se.cutoff);
+  for (const e of se.list) {
+    const b = bucket(map, 'stake:' + e.id); b.hash = e.extrinsic_id || e.id; b.ts = new Date(e.timestamp); b.ok = true; b.initKnown = true; b.from = addr;
+    b.url = e.extrinsic_id ? `https://taostats.io/extrinsic/${e.extrinsic_id}` : '';
+    const tao = rao(e.amount), alpha = rao(e.alpha), net = e.netuid, alphaSym = `SN${net}-α`, who = e.hotkey_name || short(e.hotkey);
+    const feeTao = rao(e.fee), stake = e.action === 'stake';
+    const tLeg = dir => natLeg(chain, dir, tao, e.hotkey), aLeg = dir => ({dir, amount: alpha, sym: alphaSym, name: `Subnet ${net} alpha`, token: 'alpha:' + net, kind: 'Alpha', cp: e.hotkey, cpName: who});
+    if (e.is_transfer || e.validator_swap) {
+      // stake moved to another coldkey or between validators: the alpha changes hands, no TAO is spent
+      const dir = stake ? 'in' : 'out';
+      b.preRows = [{type: dir === 'in' ? 'Deposit' : 'Withdrawal', cat: e.validator_swap ? 'Staking (Move between validators)' : 'Staking (Stake transfer)', buy: dir === 'in' ? aLeg('in') : null, sell: dir === 'out' ? aLeg('out') : null, lp: '',
+        comment: `${e.validator_swap ? 'Moved stake between validators' : (stake ? 'Received stake transferred from ' : 'Transferred stake to ') + short(e.transfer_address || '')} on subnet ${net}: ${fmtNum(alpha)} ${alphaSym} (validator ${who}).`}];
+      continue;
+    }
+    if (!net) {
+      b.noValue = {cat: stake ? 'Staking (Root stake)' : 'Staking (Root unstake)', comment: `${stake ? 'Staked' : 'Unstaked'} ${fmtNum(tao)} TAO on the root network (validator ${who}). Stake stays TAO; no balance change recorded. Fee only.`};
+      b.fee = feeTao; continue;
+    }
+    b.preRows = [{type: 'Trade', cat: stake ? 'DeFi - Staking (dTAO subnet stake)' : 'DeFi - Staking (dTAO subnet unstake)',
+      buy: stake ? aLeg('in') : tLeg('in'), sell: stake ? tLeg('out') : aLeg('out'), lp: '',
+      comment: `${stake ? 'Staked' : 'Unstaked'} on subnet ${net} with validator ${who}: ${stake ? `${fmtNum(tao)} TAO → ${fmtNum(alpha)} ${alphaSym}` : `${fmtNum(alpha)} ${alphaSym} → ${fmtNum(tao)} TAO`}${e.alpha_price_in_tao ? ` (price ${(+e.alpha_price_in_tao).toPrecision(4)} TAO per alpha)` : ''}${e.slippage ? `, slippage ${e.slippage}` : ''}. In dTAO, subnet staking swaps TAO for the subnet's alpha token.`,
+      fee: feeTao ? {amount: feeTao, sym: 'TAO'} : null}];
+  }
+  // 3) Pre-dTAO staking (before Feb 2025): stake stayed TAO, so these are fee-only rows
+  try {
+    const hs = await taoPages(`/historic/stake-events?coldkey=${addr}`, key, opt); take(hs.cutoff);
+    for (const e of hs.list) {
+      const b = bucket(map, 'hist:' + e.id); b.hash = e.extrinsic_id || e.id; b.ts = new Date(e.timestamp); b.ok = true; b.initKnown = true; b.from = addr;
+      b.url = e.extrinsic_id ? `https://taostats.io/extrinsic/${e.extrinsic_id}` : '';
+      b.noValue = {cat: e.action === 'stake' ? 'Staking (Delegate)' : 'Staking (Undelegate)', comment: `${e.action === 'stake' ? 'Delegated' : 'Undelegated'} ${fmtNum(rao(e.amount))} TAO to validator ${short(e.hotkey)} (before the dTAO upgrade, stake stayed TAO). No balance change recorded.`};
+    }
+  } catch (e) { if (e.message === 'Stopped') throw e; log(`   ⚠ Bittensor pre-dTAO stake history unavailable (${e.message.slice(0, 60)})`, 'w'); }
+  return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
+}
+
 /* ---------- XRP names (XRPScan well-known accounts) ---------- */
 let XRP_NAMES = null;
 async function xrpNames() {
@@ -1230,6 +1298,14 @@ const NONEVM_CHAINS = [
       } catch (e) { if (/HTTP 4|HTTP 5/.test(e.message)) return {active: false, count: 0, note: 'no such account'}; throw e; }
     },
     fetch: (a, o) => fetchXpr(NONEVM_BY_ID.xpr, a, o)},
+  {id: 'tao', name: 'Bittensor', code: 'TAO', native: 'TAO', family: 'tao', group: 'Other chains', def: true, label: 'Taostats · needs Taostats key',
+    txUrl: h => 'https://taostats.io/extrinsic/' + h,
+    scan: async (a, o) => {
+      if (!o.taostatsKey) return {status: 'needs key', note: 'Taostats key'};
+      try { const j = await taoGet(`/accounts/${a}`, o.taostatsKey); const d = Array.isArray(j.data) ? j.data[0] : j.data; return d ? {active: true, count: '✓', note: d.created_on_date ? 'since ' + String(d.created_on_date).slice(0, 10) : ''} : {active: false, count: 0}; }
+      catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; }
+    },
+    fetch: (a, o) => fetchTao(NONEVM_BY_ID.tao, a, o)},
 ];
 const NONEVM_BY_ID = Object.fromEntries(NONEVM_CHAINS.map(c => [c.id, c]));
 
