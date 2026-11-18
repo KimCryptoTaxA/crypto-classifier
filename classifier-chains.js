@@ -913,48 +913,70 @@ const CSPR = 'https://api.cspr.cloud';
 const csprGet = (path, key) => getJSON(proxied(CSPR + path), {headers: {Authorization: key}});
 async function fetchCasper(chain, pk, opt) {
   const key = opt.csprKey; if (!key) throw new Error('paste a free CSPR.cloud access token to use Casper');
-  let cutoff = null;
-  const pages = async path => {
-    const out = [];
-    for (let p = 1; p <= opt.maxPages; p++) {
+  // CSPR.cloud returns public keys, entry-point names and exchange labels only when asked for them ("includes").
+  const pages = async (path, limit, what) => {
+    const out = []; let cut = null;
+    for (let p = 1; p <= limit; p++) {
       const j = await csprGet(`${path}${path.includes('?') ? '&' : '?'}page=${p}&page_size=250`, key); const list = j.data || []; out.push(...list);
       if (p >= (j.page_count || 1) || !list.length) break;
       const ts = new Date(list[list.length - 1].timestamp);
       if (opt.from && ts < opt.from) break;
-      if (p === opt.maxPages && (!cutoff || ts > cutoff)) cutoff = ts;
-      await sleep(300);
+      if (p === limit) cut = ts;
+      if (what === 'rewards' && p % 10 === 0) log(`   Casper rewards: page ${p} of ${Math.min(j.page_count || p, limit)} (back to ${fmtDate(ts, $('utc').checked)})…`);
+      await sleep(250);
     }
-    return out;
+    if (cut && what) log(`   ⚠ Casper ${what}: page limit reached, only ${what} from ${fmtDate(cut, $('utc').checked)} onward were fetched. Raise "Max pages" or set a From date.`, 'w');
+    return {out, cut};
   };
+  // The account's main purse and account hash identify its own transfers even when a public key is missing.
+  let purse = '', acctHash = '';
+  try { const a = (await csprGet(`/accounts/${pk}`, key)).data || {}; purse = String(a.main_purse_uref || a.main_purse || '').replace(/-\d{3}$/, ''); acctHash = String(a.account_hash || '').replace(/^account-hash-/, '').toLowerCase(); } catch (e) { if (!notFound(e)) throw e; }
+  const mine = (pubKey, pur, hash) => (pubKey && pubKey.toLowerCase() === pk) || (purse && pur && String(pur).replace(/-\d{3}$/, '') === purse) || (acctHash && hash && String(hash).toLowerCase() === acctHash);
   const map = new Map();
-  for (const d of await pages(`/accounts/${pk}/deploys`)) {
+  const deploys = await pages(`/accounts/${pk}/deploys?includes=contract_entrypoint,contract_package`, opt.maxPages, 'deploys');
+  for (const d of deploys.out) {
     const b = bucket(map, d.deploy_hash); b.ts = new Date(d.timestamp); b.from = pk; b.initKnown = true;
     b.ok = !d.error_message && d.status !== 'expired'; b.fee = units(d.cost || '0', 9);
-    const ep = d.entry_point?.name || d.entry_point_name || '';
+    const ep = d.contract_entrypoint?.name || d.entry_point?.name || d.entry_point_name || '';
     b.method = ep || (d.execution_type_id === 6 ? 'transfer' : 'contract call');
-    if (/^delegate$/.test(ep)) b.noValue = {cat: 'Staking (Delegate)', comment: 'Delegated CSPR to a validator (still yours; no balance change recorded). Fee only.'};
-    if (/^undelegate$/.test(ep)) b.noValue = {cat: 'Staking (Undelegate)', comment: 'Started undelegating CSPR (tokens unlock after the unbonding period). Fee only.'};
-    if (/^redelegate$/.test(ep)) b.noValue = {cat: 'Staking (Redelegate)', comment: 'Moved delegated CSPR to another validator. Fee only.'};
+    if (d.contract_package?.name) b.toName = d.contract_package.name;
+    const argAmt = d.args?.amount?.parsed != null ? units(String(d.args.amount.parsed), 9) : null;
+    const amtTxt = argAmt ? `${argAmt} CSPR ` : 'CSPR ';
+    const vld = d.args?.validator?.parsed || '';
+    if (/^delegate$/.test(ep)) b.noValue = {cat: 'Staking (Delegate)', comment: `Delegated ${amtTxt}to a validator${vld ? ' ' + String(vld).slice(0, 10) + '…' : ''} (still yours; locked in stake, no transfer). Fee only.`};
+    if (/^undelegate$/.test(ep)) b.noValue = {cat: 'Staking (Undelegate)', comment: `Started undelegating ${amtTxt}— it returns to the main balance after the unbonding period (about 14 hours) without a separate transaction. Fee only.`};
+    if (/^redelegate$/.test(ep)) b.noValue = {cat: 'Staking (Redelegate)', comment: `Moved ${amtTxt}of delegated stake to another validator. Fee only.`};
   }
-  for (const t of await pages(`/accounts/${pk}/transfers`)) {
+  const transfers = await pages(`/accounts/${pk}/transfers?includes=initiator_public_key,to_public_key,from_purse_public_key,to_purse_public_key,from_purse_centralized_account_info,to_purse_centralized_account_info`, opt.maxPages, 'transfers');
+  for (const t of transfers.out) {
     const b = bucket(map, t.deploy_hash); if (!b.ts) b.ts = new Date(t.timestamp);
-    const out = t.from_purse_public_key === pk || (t.initiator_public_key === pk && t.to_public_key !== pk && t.to_purse_public_key !== pk);
-    const inn = (t.to_purse_public_key === pk || t.to_public_key === pk) && t.from_purse_public_key !== pk;
-    if (!b.from) b.from = t.initiator_public_key || '';
+    const fromMine = mine(t.from_purse_public_key, t.from_purse, null) || (!t.from_purse_public_key && !purse && t.initiator_public_key?.toLowerCase() === pk);
+    const toMine = mine(t.to_purse_public_key || t.to_public_key, t.to_purse, t.to_account_hash);
+    if (!b.from) b.from = t.initiator_public_key || t.initiator_account_hash || '';
     const amt = units(t.amount || '0', 9);
-    if (out) { b.to = t.to_public_key || t.to_purse_public_key || t.to_account_hash || ''; b.legs.push({...natLeg(chain, 'out', amt, b.to), cpName: t.to_purse_centralized_account_info?.name || t.to_purse_cspr_name}); }
-    else if (inn) b.legs.push({...natLeg(chain, 'in', amt, t.from_purse_public_key || t.initiator_public_key || ''), cpName: t.from_purse_centralized_account_info?.name});
+    // Delegating moves CSPR into a stake purse that is still yours, and CSPR.cloud never records the way back
+    // when it unbonds — so keep delegate/redelegate fee-only and count rewards separately (balances then add up).
+    if (b.noValue && /delegate$/.test(b.method)) continue;
+    if (fromMine && !toMine) { b.to = t.to_purse_public_key || t.to_public_key || t.to_account_hash || t.to_purse || ''; b.legs.push({...natLeg(chain, 'out', amt, b.to), cpName: t.to_purse_centralized_account_info?.name || t.to_centralized_account_info?.name}); }
+    else if (toMine && !fromMine) b.legs.push({...natLeg(chain, 'in', amt, t.from_purse_public_key || t.initiator_public_key || t.from_purse || ''), cpName: t.from_purse_centralized_account_info?.name});
     if (b.method === 'contract call' || !b.method) b.method = 'transfer';
   }
-  // Delegation rewards arrive every era (~2h); combine them into one row per day.
-  const daily = {};
-  for (const r of await pages(`/accounts/${pk}/delegation-rewards`)) { const day = String(r.timestamp).slice(0, 10); daily[day] = daily[day] || {amt: 0n, n: 0, ts: r.timestamp}; daily[day].amt += BigInt(r.amount || 0); daily[day].n++; }
-  for (const [day, v] of Object.entries(daily)) {
-    const b = bucket(map, 'rewards-' + day); b.ts = new Date(day + 'T23:59:59Z'); b.url = `https://cspr.live/account/${pk}`;
-    const leg = natLeg(chain, 'in', units(v.amt.toString(), 9), '');
-    b.preRows = [{type: 'Staking', cat: 'Staking Rewards', buy: leg, sell: null, lp: '', comment: `Delegation rewards for ${day} (${v.n} era${v.n > 1 ? 's' : ''}, auto-compounded into your stake).`}];
+  // Delegation rewards arrive every era (~2h) for each validator. Each payment is its own row with its exact
+  // time, because the time a reward is received sets its cost basis.
+  const rewards = await pages(`/accounts/${pk}/delegation-rewards`, Math.max(opt.maxPages * 5, 200), 'rewards');
+  let nRew = 0;
+  for (const r of rewards.out) {
+    const ts = new Date(r.timestamp); if (opt.from && ts < opt.from) continue; if (opt.to && ts > opt.to) continue;
+    const v = r.validator_public_key || '';
+    const b = bucket(map, `reward-${r.era_id}-${v}`); b.ts = ts; b.url = `https://cspr.live/account/${pk}`; b.reward = true;
+    const leg = natLeg(chain, 'in', units(String(r.amount || '0'), 9), v);
+    b.preRows = [{type: 'Staking', cat: 'Staking Rewards', buy: leg, sell: null, lp: '', comment: `Delegation reward for era ${r.era_id} from validator ${v.slice(0, 10)}…${v.slice(-4)} (auto-compounded into your stake).`}];
+    nRew++;
   }
-  return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
+  log(`   Casper: ${deploys.out.length} deploys, ${transfers.out.length} transfers, ${rewards.out.length} reward payments → ${nRew} reward rows.`);
+  const cutoff = [deploys.cut, transfers.cut].filter(Boolean).sort((a, b) => b - a)[0] || null;
+  const all = [...map.values()].filter(b => b.ts);
+  return trimToCutoff(all.filter(b => !b.reward), cutoff).concat(all.filter(b => b.reward));
 }
 
 /* ---------- XPR Network (Hyperion history API used by explorer.xprnetwork.org) ---------- */
