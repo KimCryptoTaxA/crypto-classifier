@@ -1145,7 +1145,26 @@ async function fetchMoralis(chain, addr, opt) {
 
 /* ---------- Bittensor / TAO (Taostats API; needs a Taostats API key) ---------- */
 const TAOSTATS = 'https://api.taostats.io/v1';
-const taoGet = (path, key) => getJSON(TAOSTATS + path, {headers: {Authorization: key, accept: 'application/json'}});
+// Known Bittensor exchange addresses (labels as shown on bittensor.ai; Taostats has no label for them).
+const TAO_LABELS = {'5DvmxKhxVKmuRFyH1cifSm5CyfoNFU9xzFtDgRuPphpWV5z7': 'MEXC (exchange)'};
+// Taostats' free tier rate-limits without telling us the limit, so space requests out and wait longer on "slow down".
+let TAO_LAST = 0;
+async function taoGet(path, key) {
+  for (let tries = 0; ; tries++) {
+    if (STOP) throw new Error('Stopped');
+    const wait = TAO_LAST + 1300 - Date.now(); if (wait > 0) await sleep(wait);
+    TAO_LAST = Date.now();
+    const r = await fetch(TAOSTATS + path, {headers: {Authorization: key, accept: 'application/json'}});
+    if (r.status === 429 || r.status >= 500) {
+      if (tries >= 5) throw new Error(`Taostats is rate-limiting (HTTP ${r.status}); wait a minute and fetch again`);
+      const secs = [10, 20, 30, 45, 60][tries]; log(`   … Taostats asked us to slow down; waiting ${secs}s`, 'w'); await sleep(secs * 1000); continue;
+    }
+    if (r.status === 404) throw new Error('HTTP 404');
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`Taostats HTTP ${r.status}: ${(j.message || j.error || '').slice(0, 120)}`);
+    return j;
+  }
+}
 const rao = v => units(String(v || '0'), 9);
 async function taoPages(path, key, opt) {
   const out = []; let cutoff = null;
@@ -1155,7 +1174,6 @@ async function taoPages(path, key, opt) {
     const list = j.data || []; out.push(...list);
     if (!j.pagination?.next_page || !list.length) break;
     if (p === opt.maxPages) cutoff = new Date(list[list.length - 1].timestamp);
-    await sleep(300);
   }
   return {list: out, cutoff};
 }
@@ -1163,49 +1181,76 @@ async function fetchTao(chain, addr, opt) {
   const key = opt.taostatsKey; if (!key) throw new Error('paste a Taostats API key (taostats.io) to use Bittensor');
   const map = new Map(); let cutoff = null;
   const take = c => { if (c && (!cutoff || c > cutoff)) cutoff = c; };
-  const txKey = x => x.extrinsic_id || x.transaction_hash || x.id;
+  const link = id => id ? `https://taostats.io/extrinsic/${id}` : '';
   // 1) TAO transfers
   const tr = await taoPages(`/transfers?network=finney&address=${addr}`, key, opt); take(tr.cutoff);
   for (const t of tr.list) {
-    const b = bucket(map, txKey(t)); b.ts = new Date(t.timestamp); b.ok = true; b.initKnown = true; b.method = 'transfer';
-    b.url = t.extrinsic_id ? `https://taostats.io/extrinsic/${t.extrinsic_id}` : '';
+    const b = bucket(map, t.extrinsic_id || t.transaction_hash || t.id); b.ts = new Date(t.timestamp); b.ok = true; b.initKnown = true; b.method = 'transfer'; b.url = link(t.extrinsic_id);
     if (t.from === t.to) continue;
-    if (t.from === addr) { b.from = addr; b.to = t.to; if (!b.feeSet) { b.fee = rao(t.fee); b.feeSet = true; } b.legs.push(natLeg(chain, 'out', rao(t.amount), t.to)); }
-    else if (t.to === addr) { if (!b.from) b.from = t.from; b.legs.push(natLeg(chain, 'in', rao(t.amount), t.from)); }
+    if (t.from === addr) { b.from = addr; b.to = t.to; if (!b.feeSet) { b.fee = rao(t.fee); b.feeSet = true; } b.legs.push({...natLeg(chain, 'out', rao(t.amount), t.to), cpName: TAO_LABELS[t.to]}); }
+    else if (t.to === addr) { if (!b.from) b.from = t.from; b.legs.push({...natLeg(chain, 'in', rao(t.amount), t.from), cpName: TAO_LABELS[t.from]}); }
   }
-  // 2) dTAO-era staking: staking into a subnet swaps TAO for that subnet's alpha (a trade); root (netuid 0) keeps TAO
+  // 2) Staking events, old (pre-dTAO, before Feb 2025) and new (dTAO), processed oldest-first so we can track
+  //    how much is staked and split every unstake into "your stake coming back" + "rewards".
   const se = await taoPages(`/subnets/stake-events?coldkey=${addr}`, key, opt); take(se.cutoff);
-  for (const e of se.list) {
-    const b = bucket(map, 'stake:' + e.id); b.hash = e.extrinsic_id || e.id; b.ts = new Date(e.timestamp); b.ok = true; b.initKnown = true; b.from = addr;
-    b.url = e.extrinsic_id ? `https://taostats.io/extrinsic/${e.extrinsic_id}` : '';
-    const tao = rao(e.amount), alpha = rao(e.alpha), net = e.netuid, alphaSym = `SN${net}-α`, who = e.hotkey_name || short(e.hotkey);
-    const feeTao = rao(e.fee), stake = e.action === 'stake';
-    const tLeg = dir => natLeg(chain, dir, tao, e.hotkey), aLeg = dir => ({dir, amount: alpha, sym: alphaSym, name: `Subnet ${net} alpha`, token: 'alpha:' + net, kind: 'Alpha', cp: e.hotkey, cpName: who});
-    if (e.is_transfer || e.validator_swap) {
-      // stake moved to another coldkey or between validators: the alpha changes hands, no TAO is spent
-      const dir = stake ? 'in' : 'out';
-      b.preRows = [{type: dir === 'in' ? 'Deposit' : 'Withdrawal', cat: e.validator_swap ? 'Staking (Move between validators)' : 'Staking (Stake transfer)', buy: dir === 'in' ? aLeg('in') : null, sell: dir === 'out' ? aLeg('out') : null, lp: '',
-        comment: `${e.validator_swap ? 'Moved stake between validators' : (stake ? 'Received stake transferred from ' : 'Transferred stake to ') + short(e.transfer_address || '')} on subnet ${net}: ${fmtNum(alpha)} ${alphaSym} (validator ${who}).`}];
+  let hist = [];
+  try { const hs = await taoPages(`/historic/stake-events?coldkey=${addr}`, key, opt); take(hs.cutoff); hist = hs.list; }
+  catch (e) { if (e.message === 'Stopped') throw e; log(`   ⚠ Bittensor pre-dTAO stake history unavailable (${e.message.slice(0, 60)})`, 'w'); }
+  const events = [...hist.map(e => ({...e, old: true, netuid: 0})), ...se.list].sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp));
+  const partial = !!(cutoff || opt.from);
+  const est = partial ? ' Estimate: earlier history was not loaded (page limit or From date), so part of this may be your own earlier stake coming back.' : '';
+  let taoStaked = 0; const alphaHeld = {};
+  const EPS = 1e-9;
+  for (const e of events) {
+    const b = bucket(map, (e.old ? 'hist:' : 'stake:') + e.id); b.hash = e.extrinsic_id || e.id; b.ts = new Date(e.timestamp); b.ok = true; b.initKnown = true; b.from = addr; b.url = link(e.extrinsic_id);
+    const stake = e.action === 'stake', tao = rao(e.amount), net = e.netuid || 0, who = e.hotkey_name || short(e.hotkey);
+    const fee = e.fee ? rao(e.fee) : 0, feeObj = fee ? {amount: fee, sym: 'TAO'} : null;
+    const alpha = rao(e.alpha), aSym = `SN${net}-α`;
+    const tLeg = (dir, amt) => natLeg(chain, dir, amt, e.hotkey);
+    const aLeg = (dir, amt) => ({dir, amount: amt, sym: aSym, name: `Subnet ${net} alpha`, token: 'alpha:' + net, kind: 'Alpha', cp: e.hotkey, cpName: who});
+    const era = e.old ? ' (pre-dTAO)' : net ? '' : ' (root network)';
+    b.preRows = [];
+    if (e.validator_swap) {
+      b.preRows.push({type: 'Other Fee', cat: 'Staking (Move between validators)', buy: null, sell: feeObj ? {amount: fee, sym: 'TAO', kind: 'native'} : null, lp: '', feeIsSell: true,
+        comment: `Moved stake between validators on subnet ${net} (${fmtNum(net ? alpha : tao)} ${net ? aSym : 'TAO'}, validator ${who}). Fee only.`});
+      continue;
+    }
+    if (e.is_transfer) {
+      const amt = net ? alpha : tao, dir = stake ? 'in' : 'out';
+      if (net) alphaHeld[net] = Math.max(0, (alphaHeld[net] || 0) + (stake ? amt : -amt)); else taoStaked = Math.max(0, taoStaked + (stake ? amt : -amt));
+      const leg = net ? aLeg(dir, amt) : tLeg(dir, amt);
+      b.preRows.push({type: stake ? 'Deposit' : 'Withdrawal', cat: 'Staking (Stake transfer)', buy: stake ? leg : null, sell: stake ? null : leg, lp: '',
+        comment: `${stake ? 'Received stake transferred from' : 'Transferred stake to'} ${short(e.transfer_address || '')} on subnet ${net}: ${fmtNum(amt)} ${net ? aSym : 'TAO'} (validator ${who}).`});
       continue;
     }
     if (!net) {
-      b.noValue = {cat: stake ? 'Staking (Root stake)' : 'Staking (Root unstake)', comment: `${stake ? 'Staked' : 'Unstaked'} ${fmtNum(tao)} TAO on the root network (validator ${who}). Stake stays TAO; no balance change recorded. Fee only.`};
-      b.fee = feeTao; continue;
+      // Root / pre-dTAO staking: TAO leaves the wallet into stake, and comes back on unstake (with rewards on top)
+      if (stake) {
+        taoStaked += tao;
+        b.preRows.push({type: 'Withdrawal', cat: 'Staking (Stake)', buy: null, sell: tLeg('out', tao), lp: '', fee: feeObj,
+          comment: `Staked ${fmtNum(tao)} TAO${era} with validator ${who}. Moves from the wallet into stake (still yours); it comes back as a Deposit when unstaked.`});
+      } else {
+        const back = Math.min(tao, taoStaked), reward = tao - back; taoStaked -= back;
+        if (back > EPS) b.preRows.push({type: 'Deposit', cat: 'Staking (Unstake - stake returned)', buy: tLeg('in', back), sell: null, lp: '', fee: feeObj,
+          comment: `Unstaked${era} from validator ${who}: ${fmtNum(back)} TAO of your earlier stake returned to the wallet (total unstaked ${fmtNum(tao)} TAO).`});
+        if (reward > EPS) b.preRows.push({type: 'Staking', cat: 'Staking Rewards (from unstake)', buy: tLeg('in', reward), sell: null, lp: '', fee: back > EPS ? null : feeObj,
+          comment: `Staking rewards: ${fmtNum(reward)} TAO of this ${fmtNum(tao)} TAO unstake${era} is more than you had staked, so it is counted as rewards earned (validator ${who}).${est}`});
+      }
+      continue;
     }
-    b.preRows = [{type: 'Trade', cat: stake ? 'DeFi - Staking (dTAO subnet stake)' : 'DeFi - Staking (dTAO subnet unstake)',
-      buy: stake ? aLeg('in') : tLeg('in'), sell: stake ? tLeg('out') : aLeg('out'), lp: '',
-      comment: `${stake ? 'Staked' : 'Unstaked'} on subnet ${net} with validator ${who}: ${stake ? `${fmtNum(tao)} TAO → ${fmtNum(alpha)} ${alphaSym}` : `${fmtNum(alpha)} ${alphaSym} → ${fmtNum(tao)} TAO`}${e.alpha_price_in_tao ? ` (price ${(+e.alpha_price_in_tao).toPrecision(4)} TAO per alpha)` : ''}${e.slippage ? `, slippage ${e.slippage}` : ''}. In dTAO, subnet staking swaps TAO for the subnet's alpha token.`,
-      fee: feeTao ? {amount: feeTao, sym: 'TAO'} : null}];
+    // Subnet staking (dTAO): TAO is swapped for the subnet's alpha; extra alpha on unstake is rewards
+    if (stake) {
+      alphaHeld[net] = (alphaHeld[net] || 0) + alpha;
+    } else {
+      const held = alphaHeld[net] || 0, rewardA = Math.max(0, alpha - held); alphaHeld[net] = Math.max(0, held - alpha);
+      if (rewardA > EPS) b.preRows.push({type: 'Staking', cat: 'Staking Rewards (subnet alpha)', buy: aLeg('in', rewardA), sell: null, lp: '',
+        comment: `Staking rewards: ${fmtNum(rewardA)} ${aSym} of the ${fmtNum(alpha)} ${aSym} unstaked is more than the alpha you had bought, so it is counted as rewards earned (validator ${who}).${est}`});
+    }
+    b.preRows.push({type: 'Trade', cat: stake ? 'DeFi - Staking (dTAO subnet stake)' : 'DeFi - Staking (dTAO subnet unstake)',
+      buy: stake ? aLeg('in', alpha) : tLeg('in', tao), sell: stake ? tLeg('out', tao) : aLeg('out', alpha), lp: '', fee: feeObj,
+      comment: `${stake ? 'Staked' : 'Unstaked'} on subnet ${net} with validator ${who}: ${stake ? `${fmtNum(tao)} TAO → ${fmtNum(alpha)} ${aSym}` : `${fmtNum(alpha)} ${aSym} → ${fmtNum(tao)} TAO`}${e.alpha_price_in_tao ? ` (price ${(+e.alpha_price_in_tao).toPrecision(4)} TAO per alpha)` : ''}${e.slippage ? `, slippage ${e.slippage}` : ''}. In dTAO, subnet staking swaps TAO for the subnet's alpha token.`});
   }
-  // 3) Pre-dTAO staking (before Feb 2025): stake stayed TAO, so these are fee-only rows
-  try {
-    const hs = await taoPages(`/historic/stake-events?coldkey=${addr}`, key, opt); take(hs.cutoff);
-    for (const e of hs.list) {
-      const b = bucket(map, 'hist:' + e.id); b.hash = e.extrinsic_id || e.id; b.ts = new Date(e.timestamp); b.ok = true; b.initKnown = true; b.from = addr;
-      b.url = e.extrinsic_id ? `https://taostats.io/extrinsic/${e.extrinsic_id}` : '';
-      b.noValue = {cat: e.action === 'stake' ? 'Staking (Delegate)' : 'Staking (Undelegate)', comment: `${e.action === 'stake' ? 'Delegated' : 'Undelegated'} ${fmtNum(rao(e.amount))} TAO to validator ${short(e.hotkey)} (before the dTAO upgrade, stake stayed TAO). No balance change recorded.`};
-    }
-  } catch (e) { if (e.message === 'Stopped') throw e; log(`   ⚠ Bittensor pre-dTAO stake history unavailable (${e.message.slice(0, 60)})`, 'w'); }
+  if (taoStaked > EPS || Object.values(alphaHeld).some(v => v > EPS)) log(`   ℹ Still staked at the end of the period: ${fmtNum(taoStaked)} TAO${Object.entries(alphaHeld).filter(([, v]) => v > EPS).map(([n, v]) => `, ${fmtNum(v)} SN${n}-α`).join('')} (not counted as rewards until unstaked)`);
   return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
 }
 

@@ -1,0 +1,34 @@
+CRYPTO TRANSACTION CLASSIFIER - WEB APP VERSION
+===============================================
+
+This folder is a copy of the classifier for use inside the Crypto Validation Database web app.
+Your original files one folder up are unchanged and still work with "Start Classifier (Mac).command".
+
+What is different
+-----------------
+Only one file was added (webapp-bridge.js) and one line in evm-tx-classifier.html loads it.
+- Opened on its own, the classifier works exactly like the original.
+- Opened inside the web app (Classifier tab), the web app replaces the local Python helper:
+  Blockscout PRO, Bitcoin xpub/ypub/zpub, Cardano and Casper work without running Python,
+  and "Classify wallets" on a client fills in that client's wallet addresses and tax-year dates.
+- The bridge only talks to a parent page hosted by Google Apps Script (*.googleusercontent.com).
+
+How to test it (admins only)
+----------------------------
+1. Host these three files together on any HTTPS static host, for example GitHub Pages:
+     evm-tx-classifier.html
+     classifier-chains.js
+     webapp-bridge.js
+   (e.g. a "classifier" folder in a GitHub repo with Pages turned on)
+2. Open the hosted evm-tx-classifier.html once in your browser to check it loads.
+3. In the web app: Admin > EVM classifier (test) > paste the page address >
+   Who can use it: "Admins only (testing)" > Save.
+4. Open a client > "Classify wallets", or use the Classifier tab.
+5. When you are happy, change "Who can use it" to "Everyone". Analysts then see the Classifier tab
+   and the "Classify wallets" button. Set it to "Off" to hide it again at any time.
+
+API keys
+--------
+Keys typed into the classifier (Helius, Blockscout PRO, Etherscan ...) stay in that person's browser
+("Remember keys" uses the browser's own storage). Requests for the four helper hosts pass through the
+web app's server unchanged and are never stored.
