@@ -866,7 +866,17 @@ async function fetchStellar(chain, addr, opt) {
   // Free Horizon servers keep only ~1 year. If the account's creation is not in the list, older history is missing.
   if (!cutoff && opList.length && !opList.some(o => o.type === 'create_account' && o.account === addr) && !(opt.from && new Date(opList[opList.length - 1].created_at) <= opt.from)) {
     const oldest = opList[opList.length - 1].created_at.slice(0, 10);
-    log(`   ⚠ Stellar: the free Stellar servers only keep about 1 year of history — nothing before ${oldest} was found for this account. Older transactions are missing; see stellar.expert for the full history.`, 'w');
+
+    // Estimate when the account was created: its first sequence number is (creation ledger << 32); ledgers close every ~5.6 s.
+    let created = null;
+    try {
+      const [acc, root] = await Promise.all([getJSON(`${HORIZON}/accounts/${addr}`), getJSON(`${HORIZON}/`)]);
+      const ledger = Number(BigInt(acc.sequence) >> 32n), elder = +root.history_elder_ledger, latest = +root.core_latest_ledger;
+      const [eL, lL] = await Promise.all([getJSON(`${HORIZON}/ledgers/${elder}`), getJSON(`${HORIZON}/ledgers/${latest}`)]);
+      const t0 = Date.parse(eL.closed_at), t1 = Date.parse(lL.closed_at), perLedger = (t1 - t0) / Math.max(1, latest - elder);
+      if (ledger > 0 && ledger < elder) created = new Date(t0 - (elder - ledger) * perLedger);
+    } catch (e) {}
+    log(`   ⚠ Stellar: the free Stellar servers only keep about 1 year of history — nothing before ${oldest} was found for this account${created ? ` (account created around ${created.toISOString().slice(0, 7)})` : ''}. Older transactions are missing; check them on stellar.expert.`, 'w');
   }
   const effects = await pages('effects');
   const opOf = e => BigInt(e.id.split('-')[0]).toString();
