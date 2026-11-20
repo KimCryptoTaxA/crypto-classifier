@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=21"></script>
+<script src="classifier-chains.js?v=24"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -96,7 +96,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>Buy Amount &amp; Currency, Sell Amount &amp; Currency, Fee Amount &amp; Currency, Exchange/Wallet Name, Comments, Date (mm-dd-yyyy hh:mm:ss, UTC by default), Liquidity Pool Address, Transaction Hash</li>
         <li><b>Exchange/Wallet Name</b>: chain code + last 6 characters of the address, e.g. <code>ETH_518dda</code></li>
         <li>Plain-language Comments, Chain, Wallet Address and an Explorer Link for every row; plus Summary and Wallets sheets</li>
-        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR</li>
+        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR, Bittensor, THORChain</li>
       </ul>
     </div>
     <div>
@@ -118,7 +118,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 <div class="grid">
   <section class="card">
     <h2>1. Wallets</h2>
-    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
+    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor), thor1… (THORChain). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>

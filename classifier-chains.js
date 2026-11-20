@@ -91,6 +91,7 @@ async function detectAddress(s) {
   if (/^(EQ|UQ|Ef|Uf|kQ|0Q)[A-Za-z0-9_-]{46}$/.test(s) || /^-?[01]:[0-9a-fA-F]{64}$/.test(s)) return {family: 'ton', addr: s, label: 'TON'};
   const bech = bech32Decode(s);
   if (bech) {
+    if (bech.hrp === 'thor') return {family: 'thor', addr: s.toLowerCase(), label: 'THORChain'};
     if (bech.hrp === 'bc') return {family: 'btc', addr: s.toLowerCase(), label: 'Bitcoin'};
     if (bech.hrp === 'ltc') return {family: 'ltc', addr: s.toLowerCase(), label: 'Litecoin'};
     if (COSMOS_HRP[bech.hrp]) return {family: 'cosmos', addr: s.toLowerCase(), hrp: bech.hrp, words: bech.words, label: 'Cosmos (' + bech.hrp + ')'};
@@ -979,6 +980,115 @@ async function fetchCasper(chain, pk, opt) {
   return trimToCutoff(all.filter(b => !b.reward), cutoff).concat(all.filter(b => b.reward));
 }
 
+/* ---------- THORChain (Midgard public API — free, no key, browser-friendly) ---------- */
+const MIDGARD = 'https://gateway.liquify.com/chain/thorchain_midgard/v2';
+// Midgard asset names: CHAIN.SYMBOL (native L1), CHAIN-SYMBOL (secured), CHAIN~SYMBOL (trade), CHAIN/SYMBOL (synth); tokens add -CONTRACT.
+const thorSym = a => { const m = String(a || '').match(/^([A-Z0-9]+)([.\-~/])(.+)$/i); return m ? m[3].split('-')[0].toUpperCase() : String(a || '').toUpperCase(); };
+const thorKind = a => { const m = String(a || '').match(/^[A-Z0-9]+([.\-~/])/i); return !m ? '' : m[1] === '-' ? 'secured asset' : m[1] === '~' ? 'trade asset' : m[1] === '/' ? 'synth' : ''; };
+const thorChainOf = a => String(a || '').split(/[.\-~/]/)[0].toUpperCase();
+async function fetchThor(chain, addr, opt) {
+  const A = addr.toLowerCase(), legOf = (c, dir, cp) => ({dir, amount: units(String(c.amount || '0'), 8), sym: thorSym(c.asset), name: c.asset, token: c.asset === 'THOR.RUNE' ? 'native' : c.asset,
+    kind: c.asset === 'THOR.RUNE' ? 'native' : 'token', id: null, cp: cp || '', spam: false});
+  const coins = list => list.flatMap(x => (x.coins || []).map(c => ({...c, address: x.address})));
+  const fmtC = arr => arr.map(c => `${units(String(c.amount || '0'), 8)} ${thorSym(c.asset)}${thorKind(c.asset) ? ` (${thorKind(c.asset)})` : ''}`).join(' + ');
+  // THORChain charges a flat native fee (0.02 RUNE today) for every transaction signed on THORChain itself.
+  // Midgard reports it inconsistently, so read the current value from the network.
+  let nativeFee = 0.02;
+  try { const n = await getJSON('https://gateway.liquify.com/chain/thorchain_api/thorchain/network'); if (+n.native_tx_fee_rune > 0) nativeFee = units(String(n.native_tx_fee_rune), 8); } catch (e) {}
+  // 1. download all actions (newest first, 50 per page)
+  const acts = []; let token = '', cutoff = null;
+  const range = (opt.from ? `&fromTimestamp=${Math.floor(opt.from / 1000)}` : '') + (opt.to ? `&toTimestamp=${Math.floor(opt.to / 1000)}` : '');
+  for (let p = 1; p <= opt.maxPages; p++) {
+    const j = await getJSON(`${MIDGARD}/actions?address=${A}&limit=50${range}${token ? '&nextPageToken=' + token : ''}`);
+    const list = j.actions || []; acts.push(...list);
+    token = j.meta?.nextPageToken || '';
+    if (!list.length || !token || list.length < 50) break;
+    if (p === opt.maxPages) cutoff = new Date(Number(BigInt(list[list.length - 1].date) / 1000000n));
+    await sleep(200);
+  }
+  // 2. one bucket per transaction; a "send" that only carried a swap/LP request is folded into that action
+  const byTx = new Map();
+  acts.forEach((a, i) => { const id = (a.in || []).map(x => x.txID).find(t => t && !/^0+$/.test(t)) || `${a.height}-${a.type}-${i}`; if (!byTx.has(id)) byTx.set(id, []); byTx.get(id).push(a); });
+  const map = new Map();
+  for (const [id, group] of byTx) {
+    const main = group.find(a => a.type !== 'send') || group[0];
+    const sendFee = group.filter(a => a.type === 'send' && a !== main).flatMap(a => a.metadata?.send?.networkFees || []);
+    const b = bucket(map, id); b.ts = new Date(Number(BigInt(main.date) / 1000000n)); b.method = main.type; b.from = (main.in || [])[0]?.address?.toLowerCase() || '';
+    const failed = main.status === 'failed'; b.initKnown = true; if (/^\d+-/.test(id)) b.url = `https://runescan.io/address/${A}`;
+    const md = main.metadata?.[main.type] || {};
+    const ins = coins(main.in || []), outs = coins(main.out || []);
+    const myIn = ins.filter(c => c.address?.toLowerCase() === A), myOut = outs.filter(c => c.address?.toLowerCase() === A);
+    // Outbound fees are already taken out of what was received — shown in the comment only, never as an extra fee.
+    const outFees = (md.networkFees || []).filter(f => +f.amount > 0 && main.type !== 'send');
+    const feeTxt = outFees.length ? ` Outbound fee already deducted from the amount received: ${fmtC(outFees)}.` : '';
+    // Signed on THORChain by this wallet (not an inbound from Bitcoin/Ethereum etc.) → the native RUNE fee was paid.
+    const signedHere = (main.in || []).some(x => x.address?.toLowerCase() === A && x.txID && !/^0+$/.test(x.txID) && (x.coins || []).every(c => !/^[A-Z0-9]+\./i.test(c.asset) || /^THOR\./i.test(c.asset)));
+    const fee = signedHere ? {amount: nativeFee, sym: 'RUNE'} : null;
+    void sendFee;
+    const pool = (main.pools || []).join(', ');
+    const pend = main.status === 'pending' ? ' Status: pending (streaming or not yet sent out) — check the explorer.' : '';
+    const rows = [], add = (type, cat, buy, sell, lp, comment, f) => rows.push({type, cat, buy, sell, lp: lp || '', comment, fee: f || null});
+    const memo = md.memo ? ` Memo: ${md.memo}.` : '';
+    if (main.type === 'swap') {
+      const dest = outs.filter(c => +c.amount > 0);
+      const extDest = dest.filter(c => c.address?.toLowerCase() !== A);
+      const liq = md.liquidityFee ? ` Liquidity fee: ${units(String(md.liquidityFee), 8)} (already included in the swap price).` : '';
+      if (myIn.length) {
+        const n = Math.max(myIn.length, dest.length || 1);
+        for (let k = 0; k < n; k++) {
+          const s = myIn[k] ? legOf(myIn[k], 'out', pool) : null, o = dest[k] ? legOf(dest[k], 'in', dest[k].address) : null;
+          add(s && o ? 'Trade' : s ? 'Withdrawal' : 'Deposit', 'DeFi - Swap', o, s, pool,
+            `THORChain swap: sold ${fmtC(myIn)} for ${dest.length ? fmtC(dest) : 'nothing yet'}${extDest.length ? `, delivered to ${extDest.map(c => `${thorChainOf(c.asset)} address ${short(c.address)}`).join(', ')}` : ''}. Pool(s): ${pool}.${liq}${feeTxt}${pend}${memo}`, k === 0 ? fee : null);
+        }
+      } else if (myOut.length) {
+        myOut.forEach((c, k) => add('Deposit', 'DeFi - Swap (Incoming)', legOf(c, 'in', b.from), null, pool,
+          `Received ${fmtC([c])} from a THORChain swap of ${fmtC(ins)} sent by ${short(b.from)} (${thorChainOf(ins[0]?.asset)}). If that sender is your own wallet, record the matching sale there.${pend}${memo}`));
+      }
+    } else if (main.type === 'refund') {
+      if (myIn.length) {
+        const back = {}; myOut.forEach(c => back[c.asset] = (back[c.asset] || 0n) + BigInt(c.amount || 0));
+        myIn.forEach((c, k) => {
+          const lost = BigInt(c.amount || 0) - (back[c.asset] || 0n);
+          const cost = myOut.length && lost > 0n ? {amount: units(lost.toString(), 8), sym: thorSym(c.asset), kind: 'token'} : null;
+          add('Other Fee', 'DeFi - Swap (Refunded)', null, cost, '', `Swap of ${fmtC([c])} was refunded${md.reason ? ` (${md.reason})` : ''}. ${myOut.length ? `Got back ${fmtC(myOut)}; the difference is the network fee.` : 'Refund not sent out yet — check the explorer.'}${memo}`, k === 0 ? fee : null);
+        });
+      }
+    } else if (main.type === 'addLiquidity') {
+      myIn.forEach(c => add('Withdrawal', 'DeFi - Liquidity Pool (Add)', null, legOf(c, 'out', pool), pool, `Added ${fmtC([c])} to THORChain pool ${pool}.${ins.length > myIn.length ? ` Other side: ${fmtC(ins.filter(x => !myIn.includes(x)))} from ${short(ins.find(x => !myIn.includes(x))?.address)}.` : ''}${feeTxt}${pend}${memo}`, rows.length ? null : fee));
+      if (!myIn.length) rows.push({type: 'Other Fee', cat: 'DeFi - Liquidity Pool (Add)', buy: null, sell: null, lp: pool, comment: `Liquidity added to ${pool} from another address (${short(b.from)}) with this wallet as the RUNE side.`});
+    } else if (main.type === 'withdraw') {
+      myOut.forEach((c, k) => add('Deposit', 'DeFi - Liquidity Pool (Remove)', legOf(c, 'in', pool), null, pool, `Withdrew ${fmtC([c])} from THORChain pool ${pool}${md.basisPoints ? ` (${+md.basisPoints / 100}% of the position)` : ''}.${md.impermanentLossProtection && +md.impermanentLossProtection > 0 ? ` Includes impermanent-loss protection ${units(String(md.impermanentLossProtection), 8)} RUNE.` : ''}${feeTxt}${pend}`, k === 0 ? fee : null));
+      if (!myOut.length && myIn.length) add('Other Fee', 'DeFi - Liquidity Pool (Remove)', null, null, pool, `Requested a withdrawal from ${pool}; the assets went to ${outs.map(c => short(c.address)).join(', ') || 'another address'}.${memo}`, fee);
+    } else if (main.type === 'failed') {
+      if (b.from === A) add('Other Fee', 'Failed Transaction', null, fee ? {...fee, kind: 'native'} : null, '', `Failed THORChain transaction${md.reason ? ': ' + md.reason.slice(0, 160) : ''}.${memo} Only the network fee was paid.`);
+    } else if (main.type === 'secure' || main.type === 'trade') {
+      const what = main.type === 'secure' ? 'Secured Asset' : 'Trade Account';
+      if (myIn.length) myIn.forEach(c => { const o = outs.find(x => thorSym(x.asset) === thorSym(c.asset));
+        const diff = o ? BigInt(c.amount || 0) - BigInt(o.amount || 0) : 0n;
+        add('Withdrawal', `Transfer (${what} → L1)`, null, legOf(c, 'out', o?.address), '', `Moved ${fmtC([c])} out of THORChain to ${thorChainOf(o?.asset || c.asset)} address ${o ? o.address : '?'}${o ? ` (arrived: ${fmtC([o])}${diff > 0n ? `; ${units(diff.toString(), 8)} ${thorSym(c.asset)} outbound fee` : ''})` : ''}. Match with the Deposit on that chain if it is your wallet.${pend}`, fee); });
+      else myOut.forEach(c => add('Deposit', `Transfer (L1 → ${what})`, legOf(c, 'in', b.from), null, '', `Deposited ${fmtC(ins)} from ${thorChainOf(ins[0]?.asset)} address ${short(b.from)} and received ${fmtC([c])} on THORChain. Match with the Withdrawal on that chain if it is your wallet.`));
+    } else if (main.type === 'send') {
+      myIn.forEach((c, k) => { const to = outs.find(x => x.asset === c.asset && x.address?.toLowerCase() !== A)?.address || outs[0]?.address || '';
+        b.legs.push(legOf(c, 'out', to)); });
+      myOut.forEach(c => { if (!myIn.some(x => x.asset === c.asset)) b.legs.push(legOf(c, 'in', b.from)); });
+      if (fee) { b.fee = fee.amount; b.feeCur = 'RUNE'; }
+      if (failed) b.ok = false;
+      b.to = outs.find(x => x.address?.toLowerCase() !== A)?.address || '';
+      continue;
+    } else {
+      // RUNEPool, TCY, THORName, switch, donate, loans …: record what left and what arrived
+      const label = {runePoolDeposit: 'RUNEPool (Deposit)', runePoolWithdraw: 'RUNEPool (Withdraw)', thorname: 'THORName registration', switch: 'RUNE upgrade (switch)', donate: 'Pool donation',
+        tcy_stake: 'DeFi - Staking (Stake)', tcy_unstake: 'DeFi - Staking (Unstake)', tcy_claim: 'Airdrop Claim (TCY)'}[main.type] || `THORChain - ${main.type}`;
+      if (myIn.length && myOut.length) myIn.forEach((c, k) => add('Trade', label, myOut[k] ? legOf(myOut[k], 'in', '') : null, legOf(c, 'out', ''), pool, `${label}: ${fmtC(myIn)} → ${fmtC(myOut)}.${feeTxt}${pend}${memo}`, k === 0 ? fee : null));
+      else { myIn.forEach((c, k) => add(main.type === 'thorname' ? 'Other Fee' : 'Withdrawal', label, null, legOf(c, 'out', ''), pool, `${label}: sent ${fmtC([c])}.${feeTxt}${pend}${memo}`, k === 0 ? fee : null));
+        myOut.forEach(c => add(main.type === 'tcy_claim' ? 'Airdrop' : 'Deposit', label, legOf(c, 'in', ''), null, pool, `${label}: received ${fmtC([c])}.${pend}${memo}`)); }
+    }
+    if (failed && b.from === A) rows.splice(0, rows.length, {type: 'Other Fee', cat: 'Failed Transaction', buy: null, sell: fee ? {...fee, kind: 'native'} : null, lp: '', comment: `Failed THORChain ${main.type}${md.reason ? ': ' + md.reason : ''}.`});
+    if (rows.length) b.preRows = rows; else map.delete(id);
+  }
+  return trimToCutoff([...map.values()], cutoff);
+}
+
 /* ---------- XPR Network (Hyperion history API used by explorer.xprnetwork.org) ---------- */
 const XPR_HYP = 'https://hyp-xpr.api.mainnet.metalx.com';
 const XPR_NAMES = {eosio: 'XPR system (staking/resources)', 'eosio.token': 'XPR token', 'eosio.stake': 'XPR staking', 'eosio.ram': 'XPR RAM', alcor: 'Alcor DEX', dex: 'Metal X DEX',
@@ -1373,6 +1483,10 @@ const NONEVM_CHAINS = [
       catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; }
     },
     fetch: (a, o) => fetchTao(NONEVM_BY_ID.tao, a, o)},
+  {id: 'thor', name: 'THORChain', code: 'RUNE', native: 'RUNE', family: 'thor', group: 'Other chains', def: true, label: 'Midgard (THORChain) · free, no key',
+    txUrl: h => 'https://runescan.io/tx/' + h,
+    scan: async a => { const j = await getJSON(`${MIDGARD}/actions?address=${a}&limit=1`); const n = +j.count || (j.actions || []).length; return {active: n > 0, count: n}; },
+    fetch: (a, o) => fetchThor(NONEVM_BY_ID.thor, a, o)},
 ];
 const NONEVM_BY_ID = Object.fromEntries(NONEVM_CHAINS.map(c => [c.id, c]));
 
