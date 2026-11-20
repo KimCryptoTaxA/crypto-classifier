@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=51"></script>
+<script src="classifier-chains.js?v=52"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -118,6 +118,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>Best-effort classification from on-chain data, not tax advice. Review before filing.</li>
         <li>No USD prices: CoinTracking adds them on import.</li>
         <li>Bridges appear as two rows, one on each chain. Cross-chain swaps (LI.FI, Across, Squid, deBridge, THORChain…) become one Trade; the arriving row is marked Internal.</li>
+        <li>Tiny deposits such as 0.00001 USDC from lookalike addresses are flagged as address-poisoning spam; never copy addresses from your history.</li>
         <li>ChangeNOW-style swaps are paired by time (sale up to 3 hours before the payout) — rows marked “(review)” are best guesses.</li>
         <li>Very active wallets may hit the page limit; the log warns you.</li>
         <li>Kava isn't supported. Solana, Casper, Bittensor, BNB Chain, the Moralis-only chains and the Subscan chains need a key (Polkadot and Kusama don't).</li>
@@ -584,6 +585,32 @@ function netLegs(legs) {
 }
 
 const LOOKALIKE = l => l.kind !== 'native' && /[^\x20-\x7E]/.test(l.sym) && /[A-Za-z]/.test(l.sym);
+// ---- Address poisoning: scammers send dust from an address that matches a real contact at the start and end ----
+const addrCore = a => { a = String(a || ''); return /^0x/i.test(a) ? a.slice(2).toLowerCase() : a.slice(1); }; // drop 0x / leading T, r, G…
+function lookalikeOf(cp, contacts) {
+  const c = addrCore(cp); if (c.length < 20) return '';
+  for (const real of contacts) {
+    const r = addrCore(real); if (!r || r === c || r.length !== c.length) continue;
+    let p = 0; while (p < c.length && c[p] === r[p]) p++;
+    let q = 0; while (q < c.length - p && c[c.length - 1 - q] === r[r.length - 1 - q]) q++;
+    if (p >= 3 && q >= 4 && p + q >= 7) return real;   // chance of this by accident is about 1 in 268 million
+  }
+  return '';
+}
+const longShort = a => { a = String(a || ''); return a.length > 20 ? a.slice(0, 10) + '…' + a.slice(-6) : a; };
+const STABLE_RX = /^(USDC|USDT|USD₮|USDT0|DAI|USDBC|USDC\.E|USDT\.E|FDUSD|PYUSD|TUSD|USDE|USDS|BUSD|USDP|GUSD|LUSD|FRAX|EURC)$/i;
+// Real contacts: addresses this wallet sent funds to (in transactions it signed) or received at least ~1 unit from.
+function walletContacts(txs, addr) {
+  const real = new Set(), dust = new Set();
+  for (const b of txs) for (const l of b.legs || []) {
+    if (!l.cp || l.cp === addr) continue;
+    if (l.dir === 'out' && b.from === addr && l.amount > 0) real.add(l.cp);
+    else if (l.dir === 'in' && l.amount >= 1 && !l.spam && (l.kind === 'native' || STABLE_RX.test(l.sym) || l.priced)) real.add(l.cp);
+    if (l.dir === 'in' && b.from !== addr && (l.amount === 0 || (STABLE_RX.test(l.sym) && l.amount < 0.01))) dust.add(l.cp);
+  }
+  for (const d of dust) real.delete(d);   // an address that first showed up as dust is never a "real contact"
+  return {real, dust};
+}
 function spamReason(b, a, ins, outs, used) {
   const init = b.from === a;
   if (init) return '';
@@ -594,6 +621,8 @@ function spamReason(b, a, ins, outs, used) {
   const look = ins.find(LOOKALIKE); if (look && !outs.length) return `lookalike token "${look.sym}" using look-alike foreign characters to imitate a real token`;
   if (!ins.length || outs.length) return '';
   if (ins.every(l => l.kind !== 'native' && l.amount === 0)) return 'zero-value token transfer (address-poisoning attack)';
+  const contacts = spamReason.ctx?.real;
+  if (contacts) for (const l of ins) { const real = lookalikeOf(l.cp, contacts); if (real) return `address poisoning — sender ${longShort(l.cp)} imitates your real contact ${longShort(real)} (same start and end, different middle). Never copy addresses from your history`; }
   const bad = ins.find(l => l.spam); if (bad) return b.flags[0] || `token ${bad.sym} is flagged as scam/spam by the explorer`;
   const sus = ins.find(l => l.kind !== 'native' && (SPAM_RX.test(l.sym) || SPAM_RX.test(l.name)));
   if (sus) return `unsolicited token with a phishing-style name ("${(sus.name || sus.sym).slice(0, 60)}")`;
@@ -614,6 +643,9 @@ function classify(b, ctx) {
 
   const legs = netLegs(b.legs);
   let ins = legs.filter(l => l.dir === 'in'), outs = legs.filter(l => l.dir === 'out');
+  spamReason.ctx = ctx.contacts;
+  if (!init && !outs.length && ins.length && ctx.contacts && ins.every(l => STABLE_RX.test(l.sym) && l.amount > 0 && l.amount < 0.01 && !ctx.contacts.real.has(l.cp)))
+    b.possibleSpam = b.possibleSpam || `dust: ${legStr(ins[0])} (less than one cent) from an address you never dealt with — typical address-poisoning bait`;
   const spam = spamReason(b, a, ins, outs, ctx.usedTokens);
   if (spam) {
     if (ins.length + outs.length > 3) {
@@ -752,6 +784,8 @@ function classify(b, ctx) {
       else if (l.toZero) add('Withdrawal', 'Burn', null, l, '', `Burned ${legStr(l)} (sent to ${short(l.cp)}). ${mtxt}.`);
       else if (!plain && b.toIsContract !== false && init) add('Withdrawal', 'DeFi - Contract Deposit', null, l, b.to, `Sent ${legStr(l)} into contract${proto}. ${mtxt}. Review: could be a deposit into a protocol.`);
       else if (ctx.ownAddrs?.has(l.cp)) add('Withdrawal', 'Transfer (Own Wallets)', null, l, '', `Sent ${legStr(l)} to your own wallet ${ctx.ownAddrs.get(l.cp)} (${short(l.cp)}). ${mtxt}.`);
+      else if (ctx.contacts?.dust.has(l.cp) && lookalikeOf(l.cp, [...ctx.contacts.real].filter(x => x !== l.cp)))
+        add('Withdrawal', 'Transfer Out (possible poisoning loss — review)', null, l, '', `WARNING – sent ${legStr(l)} to ${longShort(l.cp)}, which earlier sent you dust and looks like your contact ${longShort(lookalikeOf(l.cp, [...ctx.contacts.real].filter(x => x !== l.cp)))}. If this was a mistake it is a scam loss, not a normal transfer. ${mtxt}.`);
       else add('Withdrawal', 'Transfer Out', null, l, '', `Sent ${legStr(l)} to ${short(l.cp)}${l.cpName ? ` (${l.cpName})` : ''}. ${mtxt}.`);
     });
     return rows;
@@ -955,10 +989,11 @@ async function run() {
       catch (e) { if (e.message === 'Stopped') throw e; log(`   ${wname}: ${e.message}`, 'e'); WALLETS.push({chain: chain.name, wallet: wname, addr, rows: 0, note: 'Error: ' + e.message}); continue; }
       const txs = res.txs.filter(b => (!opt.from || b.ts >= opt.from) && (!opt.to || b.ts <= opt.to)).sort((x, y) => x.ts - y.ts);
       const usedTokens = new Set(); res.txs.forEach(b => { if (b.from === addr) b.legs.forEach(l => { if (l.dir === 'out') usedTokens.add(l.token); }); });
+      const contacts = walletContacts(res.txs, addr);
       let count = 0;
       for (const b of txs) {
         let rows;
-        try { rows = [...(b.preRows || []), ...(b.legs.length || !b.preRows?.length || b.noValue || !b.ok ? classify(b, {addr, chain, usedTokens, ownAddrs}) : [])]; }
+        try { rows = [...(b.preRows || []), ...(b.legs.length || !b.preRows?.length || b.noValue || !b.ok ? classify(b, {addr, chain, usedTokens, ownAddrs, contacts}) : [])]; }
         catch (e) { rows = [{type: 'Other Fee', cat: 'Unclassified', buy: null, sell: null, lp: '', comment: 'Could not classify: ' + e.message}]; }
         if (!rows.length && b.from === addr && b.fee) rows = [{type: 'Other Fee', cat: 'Contract Interaction', buy: null, sell: {amount: b.fee, sym: b.feeCur || chain.native, kind: 'native'}, lp: '', comment: `Transaction with no balance change (${b.typesText || b.method || 'unknown'}). Fee only.`, feeIsSell: true}];
         rows.forEach((r, i) => {
