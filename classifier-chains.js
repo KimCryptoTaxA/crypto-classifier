@@ -313,14 +313,16 @@ async function xpubAddresses(x, log2) {
   }
   for (const kind of kinds) for (const branch of [0, 1]) {
     const bn = await ckdPub(root, branch); let gap = 0;
-    for (let i = 0; gap < GAP && i < 2000; i++) {
-      const addr = await xpubAddress((await ckdPub(bn, i)).key, kind);
-      const j = await esploraGet(`/address/${addr}`);
-      const n = (j.chain_stats?.tx_count || 0) + (j.mempool_stats?.tx_count || 0);
-      found.push({addr, n, path: `${branch}/${i}`});
-      gap = n ? 0 : gap + 1;
-      if (log2 && i && i % 25 === 0) log2(`   xpub: checked ${branch ? 'change' : 'receive'} addresses up to #${i}…`);
-      await sleep(250);
+    // 4 addresses at a time, spread over the two Bitcoin servers
+    for (let i = 0; gap < GAP && i < 2000; i += 4) {
+      const addrs = await Promise.all([0, 1, 2, 3].map(async k => xpubAddress((await ckdPub(bn, i + k)).key, kind)));
+      const res = await Promise.all(addrs.map(ad => esploraGet(`/address/${ad}`)));
+      for (let k = 0; k < 4 && gap < GAP; k++) {
+        const n = (res[k].chain_stats?.tx_count || 0) + (res[k].mempool_stats?.tx_count || 0);
+        found.push({addr: addrs[k], n, path: `${branch}/${i + k}`}); gap = n ? 0 : gap + 1;
+      }
+      if (log2 && (i + 4) % 20 === 0) log2(`   xpub: checked ${i + 4} ${branch ? 'change' : 'receive'} addresses… (${found.filter(f => f.n).length} used so far)`);
+      await sleep(300);
     }
   }
   XPUB_CACHE.set(x, found);
@@ -1792,7 +1794,7 @@ const NONEVM_CHAINS = [
     scan: async (a) => {
       if (/^[xyz]pub/.test(a)) {
         if (HELPER) { try { const f = await xpubForms(a); const n = f.reduce((s2, x) => s2 + x.txs, 0); return {active: n > 0, count: n, note: f.length ? f.map(x => XPUB_TYPE(x.form)).join(', ') : ''}; } catch (e) {} }
-        const all = await xpubAddresses(a); const used = all.filter(x => x.n); return {active: used.length > 0, count: used.reduce((s, x) => s + x.n, 0), note: `${used.length} used address(es)`};
+        const all = await xpubAddresses(a, typeof log === 'function' ? log : null); const used = all.filter(x => x.n); return {active: used.length > 0, count: used.length ? `${used.length} addresses` : 0, note: 'worked out in the browser (no helper)'};
       }
       return scanEsplora('https://mempool.space/api', a); },
     via: a => /^[xyz]pub/.test(a) ? (HELPER ? 'Trezor Blockbook' : 'mempool.space (xpub addresses worked out in the browser)') : 'mempool.space',

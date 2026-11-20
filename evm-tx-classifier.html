@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=44"></script>
+<script src="classifier-chains.js?v=45"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -904,7 +904,7 @@ function renderScan() {
     const pills = e.items.map((x, xi) => {
       const icon = {active: '✓', none: '—', error: '⚠', 'needs key': '🔑'}[x.status] || '?';
       const cls = {active: 'on', none: 'off', error: 'err', 'needs key': 'key'}[x.status] || '';
-      return `<label class="pill ${cls}" title="${esc(x.note || x.addr)}"><input type="checkbox" data-e="${ei}" data-x="${xi}" ${x.sel ? 'checked' : ''} ${x.status === 'needs key' ? 'disabled' : ''}>${esc(x.chain.name)} ${icon}${x.count && x.count !== '✓' ? ' ' + esc(x.count) + ' tx' : ''}${x.status === 'error' ? ' ' + esc(x.note.slice(0, 40)) : ''}</label>`;
+      return `<label class="pill ${cls}" title="${esc(x.note || x.addr)}"><input type="checkbox" data-e="${ei}" data-x="${xi}" ${x.sel ? 'checked' : ''} ${x.status === 'needs key' ? 'disabled' : ''}>${esc(x.chain.name)} ${icon}${x.count && x.count !== '✓' ? ' ' + esc(x.count) + (/[a-z]/i.test(String(x.count)) ? '' : ' tx') : ''}${x.status === 'error' ? ' ' + esc(x.note.slice(0, 40)) : ''}</label>`;
     }).join('');
     const ex = e.explorers.map(x => `<span class="pill">${esc(x.ex.name)}: ${esc(x.count)}</span>`).join('');
     return `<div class="scanaddr"><h3>${esc(e.input)} <span class="fam">· ${esc(e.det.label)}</span></h3><div class="pills">${pills || '<span class="hint">no matching chains ticked</span>'}</div>${ex ? `<div class="pills" style="margin-top:6px">${ex}</div>` : ''}</div>`;
