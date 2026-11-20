@@ -6,9 +6,9 @@
  *
  * Inside the web app it:
  *  - answers the classifier's "/helper-health" check, so the helper-only features switch on
- *    (Blockscout PRO, Bitcoin xpub/ypub/zpub, Cardano, Casper);
+ *    (Blockscout PRO, Cardano, Casper, exchange labels; Bitcoin xpub is faster);
  *  - sends the requests the classifier would send to the local helper (/proxy/..., /bsproxy/...)
- *    to the web app, which forwards them from Google's servers to the same four allowed hosts;
+ *    to the web app, which forwards them from Google's servers to the allowed hosts;
  *  - fills in the wallet addresses and dates when the web app opens it for a client.
  */
 (function () {
@@ -55,7 +55,7 @@
     if (!d || d.cvd !== 1 || e.source !== window.parent) return;
     if (d.type === 'hello-ack' && !parentOrigin && isAppsScript(e.origin)) {
       parentOrigin = e.origin;
-      note('Connected to the Crypto Validation Database: helper features (Blockscout PRO, Bitcoin xpub, Cardano, Casper) are on.');
+      note('Connected to the Crypto Validation Database: helper features (Blockscout PRO, Cardano, Casper, exchange labels) are on.');
     }
     if (e.origin !== parentOrigin) return;
     if (d.type === 'proxy-res' && pending[d.id]) { pending[d.id](d); delete pending[d.id]; }

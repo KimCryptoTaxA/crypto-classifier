@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Crypto Transaction Classifier</title>
-<script src="webapp-bridge.js?v=1"></script>
+<script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=24"></script>
+<script src="classifier-chains.js?v=34"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -104,10 +104,11 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
       <ul>
         <li>Best-effort classification from on-chain data, not tax advice. Review before filing.</li>
         <li>No USD prices: CoinTracking adds them on import.</li>
-        <li>Bridges appear as two rows, one on each chain.</li>
+        <li>Bridges appear as two rows, one on each chain. Cross-chain swaps (LI.FI, Across, Squid, deBridge, THORChain…) become one Trade; the arriving row is marked Internal.</li>
+        <li>ChangeNOW-style swaps are paired by time (sale up to 3 hours before the payout) — rows marked “(review)” are best guesses.</li>
         <li>Very active wallets may hit the page limit; the log warns you.</li>
         <li>Kava isn't supported. Solana, Casper, Bittensor, BNB Chain and the Moralis-only chains need a key.</li>
-        <li>Bitcoin xpub/zpub, Cardano, Casper and the Blockscout PRO key need the Crypto Validation Database or the Mac helper.</li>
+        <li>Cardano, Casper, exchange labels and the Blockscout PRO key need the Crypto Validation Database or the Mac helper. Bitcoin xpub/zpub works everywhere (slower without the helper).</li>
         <li>Free API limits apply per key, so use your own.</li>
       </ul>
     </div>
@@ -160,7 +161,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <label>DeBank Cloud AccessKey <span class="hint">— pay-per-use; used for BNB Chain/Gnosis/Linea when Etherscan can't</span></label>
     <input type="password" id="dbKey" autocomplete="off">
     <label class="check"><input type="checkbox" id="remember"> Remember keys in this browser</label>
-    <p class="hint">Each key is sent only to its own service (moralis, taostats, helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Bitcoin xpub/zpub and Cardano need the local helper: run <code>python3 start-classifier.py</code>.</p>
+    <p class="hint">Each key is sent only to its own service (moralis, taostats, helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Cardano, Casper and exchange labels need the local helper: run <code>python3 start-classifier.py</code>.</p>
     <button type="button" class="sec" id="testBs" style="margin-top:8px">Test Blockscout key</button> <span id="testBsOut" class="hint"></span>
   </section>
 
@@ -818,7 +819,7 @@ async function scan() {
   const chains = selectedChains(); if (!chains.length) { log('Select at least one blockchain.', 'e'); return; }
   const exps = EXPLORERS.filter(x => $('ex_' + x.id)?.checked);
   const opt = getOpt(); saveKeys(); await helperUp();
-  if (!HELPER) log('ℹ Helper not running: Blockscout PRO, Bitcoin xpub/zpub and Cardano will show ⚠. Run "python3 start-classifier.py" to enable them.', 'w');
+  if (!HELPER) log('ℹ Helper not running: Blockscout PRO, Cardano, Casper and exchange labels will show ⚠ (Bitcoin xpub/zpub still works, just slower). Run "python3 start-classifier.py" to enable them.', 'w');
   STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false;
   SCAN = [];
   for (const input of raw) {
@@ -837,7 +838,7 @@ async function scan() {
       renderScan();
     }
     for (const ex of exps.filter(x => x.families.includes(det.family))) {
-      try { entry.explorers.push({ex, count: await ex.scan(det.addr, opt)}); } catch (e) { entry.explorers.push({ex, count: '⚠ ' + e.message.slice(0, 40)}); }
+      try { entry.explorers.push({ex, count: await Promise.race([ex.scan(det.addr, opt), sleep(20000).then(() => { throw new Error('no answer in 20 s — skipped'); })])}); } catch (e) { entry.explorers.push({ex, count: '⚠ ' + e.message.slice(0, 40)}); }
     }
     const act = entry.items.filter(x => x.status === 'active').map(x => x.chain.code);
     log(`   active on: ${act.length ? act.join(', ') : 'none of the checked chains'}`, act.length ? 'g' : '');
@@ -914,7 +915,7 @@ async function run() {
             'Fee Currency': r.fee ? r.fee.sym : feeHere ? (b.feeCur || chain.native) : '', 'Fee Amount': r.fee ? r.fee.amount : feeHere ? b.fee : '',
             'Exchange/Wallet Name': wname, 'Transaction Hash': b.hash, 'Liquidity Pool Address': r.lp || '',
             'Date': fmtDate(b.ts, utc), 'Comments': r.comment + (extra && i === 0 ? ' ' + extra : ''), 'Chain': chain.name, 'Wallet Address': addr,
-            'Explorer Link': b.url ? b.url : chain.txUrl ? chain.txUrl(b.hash) : (chain.explorer || chain.url) + '/tx/' + b.hash, _ts: +b.ts, _fam: chain.family, _internal: !!r.internal});
+            'Explorer Link': b.url ? b.url : chain.txUrl ? chain.txUrl(b.hash) : (chain.explorer || chain.url) + '/tx/' + b.hash, _ts: +b.ts, _fam: chain.family, _internal: !!r.internal, _cp: lc(r.buy?.cp || r.sell?.cp || b.to || '')});
           count++;
         });
       }
@@ -930,23 +931,99 @@ async function run() {
 
 /* ---------- Explorer enrichment (deBridge, LayerZero, Wormhole, OpenSea, Zerion) ---------- */
 const GENERIC = new Set(['Contract Interaction', 'DeFi - Contract Deposit', 'DeFi - Contract Withdrawal', 'Transfer Out', 'Transfer In', 'Transfer Out (not signed by you)', 'NFT - Transfer In', 'NFT - Transfer Out', 'DeFi - Swap']);
+const hkey = h => lc(String(h || '')).replace(/^0x/, ''); // EVM hashes: 0x… here, upper-case without 0x on THORChain
+const symKey = s => String(s || '').toUpperCase().replace(/\.E$/, '').replace(/^(USDBC|USDC\.E)$/, 'USDC').replace(/^(USDT0|USD₮0|USDT\.E)$/, 'USDT').replace(/^AXL/, '');
+const chainIdOf = name => CHAINS.find(c => c.name === name)?.chainid;
+const sameChain = (r, side) => side.chainId ? chainIdOf(r.Chain) === +side.chainId : side.chainName ? lc(r.Chain).startsWith(lc(side.chainName).split(/[\s-]/)[0]) : false;
+const BRIDGEABLE = new Set([...GENERIC, 'Bridge (Outgoing)', 'Bridge (Incoming)', 'DeFi - Contract Deposit', 'DeFi - Contract Withdrawal', 'Transfer In', 'Transfer Out']);
+function pairXfer(x, hits) {
+  const rowsOf = h => h ? RESULT.filter(r => hkey(r['Transaction Hash']) === hkey(h)) : [];
+  const src = rowsOf(x.src?.hash).find(r => r['Sell Currency'] && !r['Buy Currency'] && r.Type === 'Withdrawal');
+  let dst = rowsOf(x.dst?.hash).find(r => r['Buy Currency'] && !r['Sell Currency'] && r.Type === 'Deposit');
+  // No arrival hash (deBridge): look for the arrival on the destination chain — same coin, ±2% amount, within 2 hours.
+  if (!dst && !x.dst?.hash && x.out && src) {
+    const t0 = src._ts;
+    dst = RESULT.find(r => r.Type === 'Deposit' && sameChain(r, x.dst) && symKey(r['Buy Currency']) === symKey(x.out.sym) && r._ts >= t0 - 60e3 && r._ts <= t0 + 7200e3
+      && Math.abs(+r['Buy Amount'] - x.out.amount) <= Math.max(1e-9, x.out.amount * 0.02) && BRIDGEABLE.has(r.Category));
+  }
+  const outSym = dst ? dst['Buy Currency'] : x.out?.sym, outAmt = dst ? dst['Buy Amount'] : x.out?.amount;
+  const swap = src && outSym && !x.sameToken && symKey(outSym) !== symKey(src['Sell Currency']);
+  const where = `${x.dstName}${x.dst?.hash ? ' (tx ' + short(x.dst.hash) + ')' : ''}`;
+  if (src && BRIDGEABLE.has(src.Category)) {
+    if (swap) {
+      src.Type = 'Trade'; src.Category = `Cross-chain Swap (${x.via.split(' / ')[0]})`; src['Buy Amount'] = outAmt; src['Buy Currency'] = outSym;
+      src.Comments = `Cross-chain swap via ${x.via}: sold ${fmtNum(+src['Sell Amount'])} ${src['Sell Currency']} on ${src.Chain}, received ${fmtNum(+outAmt)} ${outSym} on ${where}.` + (dst ? '' : ` The arrival is not in this run — if that wallet is yours, its incoming row is the same coins (don't count them twice).`) + (x.status && !/^(done|filled|executed|success|fulfilled|completed?)$/i.test(x.status) ? ` Status: ${x.status} — check before importing.` : '');
+    } else {
+      src.Category = 'Bridge (Outgoing)';
+      src.Comments = `Bridged ${fmtNum(+src['Sell Amount'])} ${src['Sell Currency']} from ${src.Chain} to ${where} via ${x.via}${outSym ? `; ${fmtNum(+outAmt)} ${outSym} arrived` : ''}. Match with the Deposit on ${x.dstName}.`;
+    }
+    src._xfer = true; hits.add(src);
+  }
+  if (dst && BRIDGEABLE.has(dst.Category)) {
+    if (swap && src) { dst.Category = 'Internal - cross-chain swap output'; dst._internal = true; dst.Comments = `Arrival of the cross-chain swap via ${x.via} started on ${src.Chain} (${short(src['Transaction Hash'])}) — already counted as the Buy side of that Trade, so it is left out of the Excel file.`; }
+    else if (!src && x.inp && symKey(x.inp.sym) !== symKey(dst['Buy Currency']) && !x.sameToken) { dst.Category = `Cross-chain Swap (${x.via.split(' / ')[0]}, incoming)`; dst.Comments = `Received ${fmtNum(+dst['Buy Amount'])} ${dst['Buy Currency']} from a cross-chain swap via ${x.via} of ${fmtNum(x.inp.amount)} ${x.inp.sym} sent on ${x.srcName}. If the sending wallet is yours, record the sale there.`; }
+    else { dst.Category = 'Bridge (Incoming)'; dst.Comments = `Bridged in ${fmtNum(+dst['Buy Amount'])} ${dst['Buy Currency']} from ${x.srcName}${x.src?.hash ? ' (tx ' + short(x.src.hash) + ')' : ''} via ${x.via}. Match with the Withdrawal there.`; }
+    dst._xfer = true; hits.add(dst);
+  }
+}
+// Payouts from ChangeNOW-style services are paired with the send just before them (best guess → "(review)").
+async function labelPass(hits) {
+  const LABELABLE = new Set(['Transfer In', 'Transfer Out', 'DeFi - Contract Deposit', 'DeFi - Contract Withdrawal', 'Transfer Out (not signed by you)']);
+  const by = new Map();
+  for (const r of RESULT) if (r._fam === 'evm' && /^0x[0-9a-f]{40}$/.test(r._cp) && LABELABLE.has(r.Category)) { const cid = chainIdOf(r.Chain); if (!cid) continue; if (!by.has(cid)) by.set(cid, new Set()); by.get(cid).add(r._cp); }
+  if (!by.size) return;
+  log(`▶ Exchange labels: looking up ${[...by.values()].reduce((n, s) => n + s.size, 0)} counterparties…`);
+  const L = await lookupLabels(by); let n = 0;
+  const sends = RESULT.filter(r => r.Type === 'Withdrawal' && LABELABLE.has(r.Category) && !r._internal).sort((a, b) => b._ts - a._ts);
+  for (const r of [...RESULT].sort((a, b) => a._ts - b._ts)) {
+    const lab = L.get(r._cp); if (!lab || !LABELABLE.has(r.Category)) continue; n++; hits.add(r);
+    if (lab.instant && r.Type === 'Deposit') {
+      const sale = sends.find(s => !s._paired && s._ts <= r._ts && s._ts >= r._ts - 3 * 3600e3 && symKey(s['Sell Currency']) !== symKey(r['Buy Currency']));
+      if (sale) {
+        sale._paired = true; sale.Type = 'Trade'; sale['Buy Amount'] = r['Buy Amount']; sale['Buy Currency'] = r['Buy Currency'];
+        sale.Category = `Instant Exchange Swap (${lab.name}) — review`;
+        sale.Comments = `Likely ${lab.name} swap: sent ${fmtNum(+sale['Sell Amount'])} ${sale['Sell Currency']} on ${sale.Chain} and ${fmtNum(+r['Buy Amount'])} ${r['Buy Currency']} came back from ${lab.full} on ${r.Chain} ${Math.round((r._ts - sale._ts) / 60000)} min later (tx ${short(r['Transaction Hash'])}). Paired by time — please confirm. ` + sale.Comments;
+        r.Category = `Internal - ${lab.name} payout`; r._internal = true;
+        r.Comments = `Payout from ${lab.full} — already counted as the Buy side of the Trade on ${sale.Chain} (tx ${short(sale['Transaction Hash'])}), so it is left out of the Excel file. If the pairing looks wrong, tick "Include internal…" before downloading and fix it in Excel.`;
+      } else { r.Category = `Instant Exchange Payout (${lab.name}) — review`; r.Comments = `Received from ${lab.full}: the payout of an instant swap. The coins you sold were sent from a wallet that is not in this run (or more than 3 hours earlier) — record the sale there. ` + r.Comments; }
+    } else if (r.Type === 'Deposit') { r.Category = `Transfer from Exchange (${lab.name})`; r.Comments = `From ${lab.full}. ` + r.Comments; }
+    else if (r.Type === 'Withdrawal') { r.Category = lab.instant ? `Transfer to Instant Exchange (${lab.name})` : `Transfer to Exchange (${lab.name})`; r.Comments = `To ${lab.full}. ` + r.Comments; }
+  }
+  log(`   Exchange labels: ${n} row(s) labelled.`, 'g');
+}
 async function enrich(opt) {
   const exps = EXPLORERS.filter(x => $('ex_' + x.id)?.checked); if (!exps.length || !RESULT.length) return;
   const notes = new Map(); // lowercased tx hash -> [{cat, comment}]
   const addrs = new Map(); SCAN.forEach(e => { if (e.det.family && e.items.some(x => x.sel)) addrs.set(e.det.addr, e.det.family); });
   for (const ex of exps) for (const [a, fam] of addrs) {
-    if (!ex.families.includes(fam) || STOP) continue;
+    if (!ex.families.includes(fam) || STOP || ex.post) continue;
+    // skip a service that found nothing (or did not answer) for this address during the scan
+    const sc = SCAN.find(e => e.det.addr === a)?.explorers?.find(e => e.ex.id === ex.id);
+    if (sc && (sc.count === 0 || sc.count === '0' || /^⚠/.test(String(sc.count)))) continue;
     if (ex.key && !opt[ex.key]) continue;
     try {
       log(`▶ ${ex.name}: ${short(a)}…`);
       const list = await ex.fetch(a, opt);
-      list.forEach(n => { if (!n.hash) return; const k = lc(n.hash); if (!notes.has(k)) notes.set(k, []); notes.get(k).push(n); });
+      list.forEach(n => { if (!n.hash) return; const k = hkey(n.hash); if (!notes.has(k)) notes.set(k, []); notes.get(k).push(n); });
       log(`   ${ex.name}: ${list.length} record(s)`, 'g');
     } catch (e) { log(`   ${ex.name}: ${e.message.slice(0, 100)}`, 'w'); }
   }
-  let hit = 0;
+  // Records with apply() (THORChain) rewrite the row themselves, in two passes; the rest add a comment / better category.
+  const ctx = {done: new Set(), thorRun: new Set([...addrs].filter(([a, f]) => f === 'thor' || f === 'evm').map(([a]) => lc(a)))};
+  const hits = new Set();
+  for (const phase of [1, 2]) for (const r of RESULT) {
+    for (const n of notes.get(hkey(r['Transaction Hash'])) || []) if (n.apply && n.phase === phase && n.apply(r, ctx)) hits.add(r);
+  }
+  // Cross-chain records (LI.FI, Across, Axelar/Squid, deBridge, LayerZero, Wormhole): pair the sending and arriving rows.
+  const xfers = new Map(); for (const ns of notes.values()) for (const n of ns) if (n.xfer && !xfers.has(n.xfer.id)) xfers.set(n.xfer.id, n.xfer);
+  for (const x of xfers.values()) pairXfer(x, hits);
+  if ($('ex_labels')?.checked) {
+    if (!HELPER) log('   Exchange labels skipped: they need the helper (Start Classifier) or the Crypto Validation Database.', 'w');
+    else try { await labelPass(hits); } catch (e) { log(`   Exchange labels: ${e.message.slice(0, 100)}`, 'w'); }
+  }
+  let hit = hits.size;
   for (const r of RESULT) {
-    const ns = notes.get(lc(r['Transaction Hash'])); if (!ns) continue; hit++;
+    const ns = (notes.get(hkey(r['Transaction Hash'])) || []).filter(n => !n.apply && !(n.xfer && r._xfer)); if (!ns.length) continue; if (!hits.has(r)) hit++;
     for (const n of ns) {
       if (!r.Comments.includes(n.comment)) r.Comments += ' ' + n.comment;
       if (n.cat && (GENERIC.has(r.Category) || (n.trash && r.Category !== 'Scam/Spam')) && !(r.Category === 'DeFi - Swap' && /Bridge/.test(n.cat) === false)) r.Category = n.cat;

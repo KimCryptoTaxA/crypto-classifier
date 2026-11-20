@@ -170,6 +170,129 @@ async function scanEsplora(base, addr) {
   const n = (j.chain_stats?.tx_count || 0) + (j.mempool_stats?.tx_count || 0);
   return {active: n > 0, count: n};
 }
+/* ---------- Bitcoin xpub/ypub/zpub worked out in the browser (no helper, no key) ----------
+   The extended public key is turned into the wallet's receive (…/0/i) and change (…/1/i) addresses with
+   standard BIP32 maths; each address is then read from mempool.space. Stops after 20 unused addresses in a row. */
+const SECP = {p: 2n ** 256n - 2n ** 32n - 977n, n: 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n,
+  G: [0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798n, 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8n]};
+const modp = a => { const r = a % SECP.p; return r < 0n ? r + SECP.p : r; };
+const powp = (b, e) => { let r = 1n; b = modp(b); while (e > 0n) { if (e & 1n) r = r * b % SECP.p; b = b * b % SECP.p; e >>= 1n; } return r; };
+const invp = a => powp(a, SECP.p - 2n);
+function ecAdd(P, Q) {
+  if (!P) return Q; if (!Q) return P;
+  if (P[0] === Q[0]) { if (modp(P[1] + Q[1]) === 0n) return null; const l = modp(3n * P[0] * P[0] * invp(2n * P[1])); const x = modp(l * l - 2n * P[0]); return [x, modp(l * (P[0] - x) - P[1])]; }
+  const l = modp((Q[1] - P[1]) * invp(Q[0] - P[0])); const x = modp(l * l - P[0] - Q[0]); return [x, modp(l * (P[0] - x) - P[1])];
+}
+function ecMul(k, P) { let R = null, A = P; while (k > 0n) { if (k & 1n) R = ecAdd(R, A); A = ecAdd(A, A); k >>= 1n; } return R; }
+const bytesToBig = b => b.reduce((n, x) => (n << 8n) | BigInt(x), 0n);
+const bigTo32 = n => { const o = new Uint8Array(32); for (let i = 31; i >= 0; i--) { o[i] = Number(n & 255n); n >>= 8n; } return o; };
+function ecDecompress(c) { const x = bytesToBig(c.slice(1)); let y = powp(x * x * x + 7n, (SECP.p + 1n) / 4n); if ((y & 1n) !== BigInt(c[0] & 1)) y = SECP.p - y; return [x, y]; }
+const ecCompress = P => { const o = new Uint8Array(33); o[0] = P[1] & 1n ? 3 : 2; o.set(bigTo32(P[0]), 1); return o; };
+async function hmac512(key, data) { const k = await crypto.subtle.importKey('raw', key, {name: 'HMAC', hash: 'SHA-512'}, false, ['sign']); return new Uint8Array(await crypto.subtle.sign('HMAC', k, data)); }
+async function ckdPub(node, i) { // non-hardened child of {key (33 bytes), chain (32 bytes)}
+  const d = new Uint8Array(37); d.set(node.key); d[33] = i >>> 24; d[34] = (i >>> 16) & 255; d[35] = (i >>> 8) & 255; d[36] = i & 255;
+  const I = await hmac512(node.chain, d); const il = bytesToBig(I.slice(0, 32));
+  return {key: ecCompress(ecAdd(ecMul(il, SECP.G), ecDecompress(node.key))), chain: I.slice(32)};
+}
+function ripemd160(msg) {
+  const rl = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13];
+  const rr = [5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11];
+  const sl = [11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8,7,6,8,13,11,9,7,15,7,12,15,9,11,7,13,12,11,13,6,7,14,9,13,15,14,8,13,6,5,12,7,5,11,12,14,15,14,15,9,8,9,14,5,6,8,6,5,12,9,15,5,11,6,8,13,12,5,12,13,14,11,8,5,6];
+  const sr = [8,9,9,11,13,15,15,5,7,7,8,11,14,14,12,6,9,13,15,7,12,8,9,11,7,7,12,7,6,15,13,11,9,7,15,11,8,6,6,14,12,13,5,14,13,13,7,5,15,5,8,11,14,14,6,14,6,9,12,9,12,5,15,8,8,5,12,9,12,5,14,6,8,13,6,5,15,13,11,11];
+  const KL = [0, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e], KR = [0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0];
+  const f = (j, x, y, z) => j < 16 ? x ^ y ^ z : j < 32 ? (x & y) | (~x & z) : j < 48 ? (x | ~y) ^ z : j < 64 ? (x & z) | (y & ~z) : x ^ (y | ~z);
+  const rol = (x, n) => (x << n) | (x >>> (32 - n));
+  const len = msg.length, padLen = ((len + 8) >> 6 << 6) + 64, m = new Uint8Array(padLen); m.set(msg); m[len] = 0x80;
+  const bits = len * 8; m[padLen - 8] = bits & 255; m[padLen - 7] = (bits >>> 8) & 255; m[padLen - 6] = (bits >>> 16) & 255; m[padLen - 5] = (bits >>> 24) & 255;
+  let h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0;
+  for (let o = 0; o < padLen; o += 64) {
+    const X = []; for (let i = 0; i < 16; i++) X.push(m[o + i * 4] | (m[o + i * 4 + 1] << 8) | (m[o + i * 4 + 2] << 16) | (m[o + i * 4 + 3] << 24));
+    let al = h0, bl = h1, cl = h2, dl = h3, el = h4, ar = h0, br = h1, cr = h2, dr = h3, er = h4;
+    for (let j = 0; j < 80; j++) {
+      let t = (rol((al + f(j, bl, cl, dl) + X[rl[j]] + KL[j >> 4]) | 0, sl[j]) + el) | 0; al = el; el = dl; dl = rol(cl, 10); cl = bl; bl = t;
+      t = (rol((ar + f(79 - j, br, cr, dr) + X[rr[j]] + KR[j >> 4]) | 0, sr[j]) + er) | 0; ar = er; er = dr; dr = rol(cr, 10); cr = br; br = t;
+    }
+    const t = (h1 + cl + dr) | 0; h1 = (h2 + dl + er) | 0; h2 = (h3 + el + ar) | 0; h3 = (h4 + al + br) | 0; h4 = (h0 + bl + cr) | 0; h0 = t;
+  }
+  const out = new Uint8Array(20); [h0, h1, h2, h3, h4].forEach((h, i) => { for (let k = 0; k < 4; k++) out[i * 4 + k] = (h >>> (8 * k)) & 255; }); return out;
+}
+const hash160 = async b => ripemd160(await sha256(b));
+async function xpubAddress(pubkey, kind) {
+  const h = await hash160(pubkey);
+  if (kind === 'zpub') return bech32Encode('bc', [0, ...toWords(h)]);
+  if (kind === 'ypub') { const rs = new Uint8Array(22); rs[0] = 0; rs[1] = 20; rs.set(h, 2); const body = new Uint8Array(21); body[0] = 5; body.set(await hash160(rs), 1); return b58checkEncode(body); }
+  const body = new Uint8Array(21); body[0] = 0; body.set(h, 1); return b58checkEncode(body);
+}
+async function xpubNode(x) {
+  const d = await b58check(x); if (!d || d.length !== 78) throw new Error('not a valid xpub/ypub/zpub');
+  return {key: d.slice(45, 78), chain: d.slice(13, 45), kind: x.slice(0, 4)};
+}
+// Two free Esplora servers with identical APIs; requests alternate between them and back off when one is busy.
+const ESPLORA = ['https://mempool.space/api', 'https://blockstream.info/api']; let esploraTurn = 0; const esploraRest = {};
+// Each request waits at most 15 s; a server that fails or is busy rests for 2 minutes while the other one is used.
+async function esploraGet(path) {
+  let err;
+  for (let k = 0; k < 10; k++) {
+    if (typeof STOP !== 'undefined' && STOP) throw new Error('Stopped');
+    const ready = ESPLORA.filter(b => !(esploraRest[b] > Date.now()));
+    if (!ready.length) { await sleep(5000); continue; }
+    const base = ready[esploraTurn++ % ready.length];
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const r = await fetch(base + path, {signal: ctl.signal});
+      if (r.status === 429 || r.status >= 500) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { const e = new Error('HTTP ' + r.status); e.final = true; throw e; }
+      return await r.json();
+    } catch (e) { err = e; if (e.final) throw e; esploraRest[base] = Date.now() + 120000; }
+    finally { clearTimeout(timer); }
+  }
+  throw err || new Error('Bitcoin servers busy — try again in a few minutes');
+}
+// Walk receive (0) and change (1) addresses until 20 in a row are unused. Returns [{addr, n}] with tx counts.
+const XPUB_CACHE = new Map(); // xpub -> address list from the scan, reused by the fetch (saves ~40+ requests)
+async function xpubAddresses(x, log2) {
+  if (XPUB_CACHE.has(x)) return XPUB_CACHE.get(x);
+  const root = await xpubNode(x), found = [], GAP = 20;
+  for (const branch of [0, 1]) {
+    const bn = await ckdPub(root, branch); let gap = 0;
+    for (let i = 0; gap < GAP && i < 2000; i++) {
+      const addr = await xpubAddress((await ckdPub(bn, i)).key, root.kind);
+      const j = await esploraGet(`/address/${addr}`);
+      const n = (j.chain_stats?.tx_count || 0) + (j.mempool_stats?.tx_count || 0);
+      found.push({addr, n, path: `${branch}/${i}`});
+      gap = n ? 0 : gap + 1;
+      if (log2 && i && i % 25 === 0) log2(`   xpub: checked ${branch ? 'change' : 'receive'} addresses up to #${i}…`);
+      await sleep(250);
+    }
+  }
+  XPUB_CACHE.set(x, found);
+  return found;
+}
+async function fetchXpubLocal(chain, x, opt) {
+  const all = await xpubAddresses(x, typeof log === 'function' ? log : null);
+  const used = all.filter(a => a.n > 0), own = new Set(all.map(a => a.addr));
+  log(`   xpub: ${used.length} used address(es) of ${all.length} checked.`);
+  const seen = new Map(); let cutoff = null, done = 0;
+  for (const a of used) {
+    if (++done % 10 === 0) log(`   xpub: downloaded history of ${done} of ${used.length} addresses…`);
+    let last = null;
+    for (let p = 0; p < opt.maxPages * 2; p++) {
+      const j = await esploraGet(`/address/${a.addr}/txs${last ? '/chain/' + last : ''}`);
+      const conf = (j || []).filter(t => t.status?.confirmed); conf.forEach(t => seen.set(t.txid, t));
+      if (conf.length < 25) break;
+      last = conf[conf.length - 1].txid;
+      const ts = conf[conf.length - 1].status.block_time * 1000;
+      if (opt.from && ts < +opt.from) break;
+      if (p === opt.maxPages * 2 - 1 && (!cutoff || ts > +cutoff)) cutoff = new Date(ts);
+      await sleep(200);
+    }
+    await sleep(150);
+  }
+  const txs = [...seen.values()].map(t => ({hash: t.txid, ts: new Date(t.status.block_time * 1000), fee: (t.fee || 0) / 1e8,
+    ins: t.vin.map(v => ({addr: v.prevout?.scriptpubkey_address || '', value: (v.prevout?.value || 0) / 1e8})),
+    outs: t.vout.map(v => ({addr: v.scriptpubkey_address || '', value: (v.value || 0) / 1e8}))}));
+  return trimToCutoff(utxoBuckets(chain, txs, own, x), cutoff);
+}
 const BLOCKBOOK = 'https://btc1.trezor.io/api/v2';
 async function fetchXpub(chain, x, opt) {
   const own = new Set(), raw = []; let cutoff = null, pages = 1;
@@ -986,6 +1109,26 @@ const MIDGARD = 'https://gateway.liquify.com/chain/thorchain_midgard/v2';
 const thorSym = a => { const m = String(a || '').match(/^([A-Z0-9]+)([.\-~/])(.+)$/i); return m ? m[3].split('-')[0].toUpperCase() : String(a || '').toUpperCase(); };
 const thorKind = a => { const m = String(a || '').match(/^[A-Z0-9]+([.\-~/])/i); return !m ? '' : m[1] === '-' ? 'secured asset' : m[1] === '~' ? 'trade asset' : m[1] === '/' ? 'synth' : ''; };
 const thorChainOf = a => String(a || '').split(/[.\-~/]/)[0].toUpperCase();
+// Which app sent a THORChain swap: its affiliate THORName (data field, or 5th part of the memo "=:ASSET:dest:limit:AFFILIATE:fee").
+const THOR_APPS = {ss: 'ShapeShift', t: 'THORSwap'};
+function thorApp(md) {
+  const tag = String(md?.affiliateAddress || String(md?.memo || '').split(':')[4] || '').trim().toLowerCase();
+  if (!tag) return '';
+  return tag.split('/').map(t => THOR_APPS[t] ? `${THOR_APPS[t]}` : `app "${t}"`).join(' + ');
+}
+async function midgardActions(addr, opt) {
+  const acts = []; let token = '', cutoff = null;
+  const range = (opt.from ? `&fromTimestamp=${Math.floor(opt.from / 1000)}` : '') + (opt.to ? `&toTimestamp=${Math.floor(opt.to / 1000)}` : '');
+  for (let p = 1; p <= opt.maxPages; p++) {
+    const j = await getJSON(`${MIDGARD}/actions?address=${addr}&limit=50${range}${token ? '&nextPageToken=' + token : ''}`);
+    const list = j.actions || []; acts.push(...list);
+    token = j.meta?.nextPageToken || '';
+    if (!list.length || !token || list.length < 50) break;
+    if (p === opt.maxPages) cutoff = new Date(Number(BigInt(list[list.length - 1].date) / 1000000n));
+    await sleep(200);
+  }
+  return {acts, cutoff};
+}
 async function fetchThor(chain, addr, opt) {
   const A = addr.toLowerCase(), legOf = (c, dir, cp) => ({dir, amount: units(String(c.amount || '0'), 8), sym: thorSym(c.asset), name: c.asset, token: c.asset === 'THOR.RUNE' ? 'native' : c.asset,
     kind: c.asset === 'THOR.RUNE' ? 'native' : 'token', id: null, cp: cp || '', spam: false});
@@ -996,16 +1139,7 @@ async function fetchThor(chain, addr, opt) {
   let nativeFee = 0.02;
   try { const n = await getJSON('https://gateway.liquify.com/chain/thorchain_api/thorchain/network'); if (+n.native_tx_fee_rune > 0) nativeFee = units(String(n.native_tx_fee_rune), 8); } catch (e) {}
   // 1. download all actions (newest first, 50 per page)
-  const acts = []; let token = '', cutoff = null;
-  const range = (opt.from ? `&fromTimestamp=${Math.floor(opt.from / 1000)}` : '') + (opt.to ? `&toTimestamp=${Math.floor(opt.to / 1000)}` : '');
-  for (let p = 1; p <= opt.maxPages; p++) {
-    const j = await getJSON(`${MIDGARD}/actions?address=${A}&limit=50${range}${token ? '&nextPageToken=' + token : ''}`);
-    const list = j.actions || []; acts.push(...list);
-    token = j.meta?.nextPageToken || '';
-    if (!list.length || !token || list.length < 50) break;
-    if (p === opt.maxPages) cutoff = new Date(Number(BigInt(list[list.length - 1].date) / 1000000n));
-    await sleep(200);
-  }
+  const {acts, cutoff} = await midgardActions(A, opt);
   // 2. one bucket per transaction; a "send" that only carried a swap/LP request is folded into that action
   const byTx = new Map();
   acts.forEach((a, i) => { const id = (a.in || []).map(x => x.txID).find(t => t && !/^0+$/.test(t)) || `${a.height}-${a.type}-${i}`; if (!byTx.has(id)) byTx.set(id, []); byTx.get(id).push(a); });
@@ -1037,8 +1171,8 @@ async function fetchThor(chain, addr, opt) {
         const n = Math.max(myIn.length, dest.length || 1);
         for (let k = 0; k < n; k++) {
           const s = myIn[k] ? legOf(myIn[k], 'out', pool) : null, o = dest[k] ? legOf(dest[k], 'in', dest[k].address) : null;
-          add(s && o ? 'Trade' : s ? 'Withdrawal' : 'Deposit', 'DeFi - Swap', o, s, pool,
-            `THORChain swap: sold ${fmtC(myIn)} for ${dest.length ? fmtC(dest) : 'nothing yet'}${extDest.length ? `, delivered to ${extDest.map(c => `${thorChainOf(c.asset)} address ${short(c.address)}`).join(', ')}` : ''}. Pool(s): ${pool}.${liq}${feeTxt}${pend}${memo}`, k === 0 ? fee : null);
+          add(s && o ? 'Trade' : s ? 'Withdrawal' : 'Deposit', thorApp(md) ? `DeFi - Swap (THORChain via ${thorApp(md)})` : 'DeFi - Swap', o, s, pool,
+            `THORChain swap${thorApp(md) ? ' made in ' + thorApp(md) : ''}: sold ${fmtC(myIn)} for ${dest.length ? fmtC(dest) : 'nothing yet'}${extDest.length ? `, delivered to ${extDest.map(c => `${thorChainOf(c.asset)} address ${short(c.address)}`).join(', ')}` : ''}. Pool(s): ${pool}.${liq}${feeTxt}${pend}${memo}`, k === 0 ? fee : null);
         }
       } else if (myOut.length) {
         myOut.forEach((c, k) => add('Deposit', 'DeFi - Swap (Incoming)', legOf(c, 'in', b.from), null, pool,
@@ -1399,11 +1533,20 @@ const NONEVM_CHAINS = [
     txUrl: h => 'https://solscan.io/tx/' + h,
     scan: async (a, o) => { if (!o.heliusKey) return {status: 'needs key', note: 'Helius key'}; const r = await heliusRpc(o.heliusKey, 'getSignaturesForAddress', [a, {limit: 1000}]); const n = r.result?.length || 0; return {active: n > 0, count: n >= 1000 ? '1000+' : n}; },
     fetch: (a, o) => fetchSolana(NONEVM_BY_ID.sol, a, o)},
-  {id: 'btc', name: 'Bitcoin', code: 'BTC', native: 'BTC', family: 'btc', group: 'Bitcoin & co.', def: true, label: 'mempool.space · xpub via Trezor (helper)',
+  {id: 'btc', name: 'Bitcoin', code: 'BTC', native: 'BTC', family: 'btc', group: 'Bitcoin & co.', def: true, label: 'mempool.space · free (xpub/ypub/zpub too)',
     txUrl: h => 'https://mempool.space/tx/' + h,
-    scan: async (a) => { if (/^[xyz]pub/.test(a)) { const j = await getJSON(proxied(`${BLOCKBOOK}/xpub/${a}?details=basic`)); return {active: j.txs > 0, count: j.txs}; } return scanEsplora('https://mempool.space/api', a); },
-    via: a => /^[xyz]pub/.test(a) ? 'Trezor Blockbook' : 'mempool.space',
-    fetch: (a, o) => /^[xyz]pub/.test(a) ? fetchXpub(NONEVM_BY_ID.btc, a, o) : fetchEsplora(NONEVM_BY_ID.btc, 'https://mempool.space/api', a, o)},
+    // xpub: the addresses are worked out in the browser; Trezor Blockbook (via the helper) is only a faster extra when the helper runs.
+    scan: async (a) => {
+      if (/^[xyz]pub/.test(a)) {
+        if (HELPER) { try { const j = await getJSON(proxied(`${BLOCKBOOK}/xpub/${a}?details=basic`)); return {active: j.txs > 0, count: j.txs}; } catch (e) {} }
+        const all = await xpubAddresses(a); const used = all.filter(x => x.n); return {active: used.length > 0, count: used.reduce((s, x) => s + x.n, 0), note: `${used.length} used address(es)`};
+      }
+      return scanEsplora('https://mempool.space/api', a); },
+    via: a => /^[xyz]pub/.test(a) ? (HELPER ? 'Trezor Blockbook' : 'mempool.space (xpub addresses worked out in the browser)') : 'mempool.space',
+    fetch: async (a, o) => {
+      if (!/^[xyz]pub/.test(a)) return fetchEsplora(NONEVM_BY_ID.btc, 'https://mempool.space/api', a, o);
+      if (HELPER) { try { return await fetchXpub(NONEVM_BY_ID.btc, a, o); } catch (e) { log(`   Trezor Blockbook unavailable (${e.message.slice(0, 60)}) — working out the addresses in the browser instead.`, 'w'); } }
+      return fetchXpubLocal(NONEVM_BY_ID.btc, a, o); }},
   {id: 'ltc', name: 'Litecoin', code: 'LTC', native: 'LTC', family: 'ltc', group: 'Bitcoin & co.', def: true, label: 'litecoinspace.org · free',
     txUrl: h => 'https://litecoinspace.org/tx/' + h,
     scan: a => scanEsplora('https://litecoinspace.org/api', a), fetch: (a, o) => fetchEsplora(NONEVM_BY_ID.ltc, 'https://litecoinspace.org/api', a, o)},
@@ -1500,7 +1643,166 @@ const cname = (m, id) => m[id] || 'chain ' + id;
 const big = o => o?.bigIntegerValue ?? o?.stringValue ?? '0';
 const ZERION_CAT = {trade: 'DeFi - Swap', deposit: 'DeFi - Deposit', withdraw: 'DeFi - Withdraw', claim: 'DeFi - Rewards Claim', stake: 'DeFi - Staking (Stake)', unstake: 'DeFi - Staking (Unstake)',
   borrow: 'DeFi - Lending', repay: 'DeFi - Lending', approve: 'Approval', mint: 'Mint', burn: 'Burn'};
+/* ---------- Address labels (exchanges, instant-swap services) — Blockscout metadata service, via the helper ---------- */
+const LABEL_API = 'https://metadata.services.blockscout.com/api/v1/metadata';
+const INSTANT_RX = /changenow|simpleswap|fixedfloat|ff\.io|sideshift|stealthex|exolix|letsexchange|changelly|godex|swapzone|trocador|majestic ?bank|shapeshift|changehero|quickex|switchain|nexchange|coinswitch|exch\.cx|fixed ?float/i;
+// addrsByChain: Map(chainId -> Set(lowercase 0x addresses)) → Map(lowercase address -> {name, instant, exchange})
+async function lookupLabels(addrsByChain) {
+  const out = new Map();
+  for (const [cid, set] of addrsByChain) {
+    const list = [...set];
+    for (let i = 0; i < list.length; i += 40) {
+      const j = await getJSON(proxied(`${LABEL_API}?addresses=${list.slice(i, i + 40).join(',')}&chainId=${cid}&tags=name,protocol,generic`));
+      for (const [a, v] of Object.entries(j.addresses || {})) {
+        if (/^0x0{40}$/i.test(a)) continue;
+        const tags = v.tags || [], gen = tags.filter(t => t.tagType === 'generic').map(t => t.slug || lc(t.name));
+        if (gen.some(g => /^(dex|router|bridge|burn|miner)$/.test(g))) continue;                     // DEX routers, bridges: not exchanges
+        const instant = INSTANT_RX.test(tags.map(t => t.name).join(' '));
+        if (!instant && !gen.some(g => /^(exchange|hot-wallet|cex)$/.test(g))) continue;            // only real exchanges / swap services
+        const proto = tags.find(t => t.tagType === 'protocol')?.name, nm = tags.find(t => t.tagType === 'name')?.name || '';
+        const name = (proto || nm.split(':')[0].replace(/\s+\d+$/, '')).trim(); if (!name) continue;
+        out.set(a.toLowerCase(), {name, full: nm || name, instant, exchange: true});
+      }
+      await sleep(200);
+    }
+  }
+  return out;
+}
+// One cross-chain movement → a note on the sending tx and one on the arrival tx (both carry the same xfer object).
+function xferNotes(x) {
+  const name = side => side.chainName ? String(side.chainName).replace(/^\w/, c => c.toUpperCase()) : (CHAIN_NAMES[side.chainId] || (side.chainId ? 'chain ' + side.chainId : '?'));
+  x.srcName = name(x.src || {}); x.dstName = name(x.dst || {});
+  const comment = `${x.via}: ${x.srcName} → ${x.dstName}${x.inp ? `, sent ${fmtNum(x.inp.amount)} ${x.inp.sym}` : ''}${x.out ? `, received ${fmtNum(x.out.amount)} ${x.out.sym}` : ''}${x.status && !/^(done|filled|executed|success|fulfilled|completed?)$/i.test(x.status) ? ` (status: ${x.status})` : ''}.`;
+  x.comment = comment;
+  const n = [];
+  if (x.src?.hash) n.push({hash: x.src.hash, xfer: x, role: 'src', cat: 'Bridge (Outgoing)', comment});
+  if (x.dst?.hash) n.push({hash: x.dst.hash, xfer: x, role: 'dst', cat: 'Bridge (Incoming)', comment});
+  return n;
+}
 const EXPLORERS = [
+  {id: 'labels', name: 'Exchange & instant-swap labels', families: ['evm'], label: 'ChangeNOW, SimpleSwap, FixedFloat, SideShift, Binance… · free (helper)', def: true, post: true,
+    scan: async () => HELPER ? 'after fetch' : 'needs helper', fetch: async () => []},
+  // THORChain swaps/liquidity started from (or paid out to) an EVM wallet: Ethereum only shows "sent X to the router".
+  // Midgard knows both sides, so the Ethereum rows are relabelled in place (no extra rows). Two passes:
+  // phase 1 turns the wallet's own outgoing row into a Trade / LP add; phase 2 handles payouts and the thor1 side.
+  {id: 'thorchain', name: 'THORChain (Midgard)', families: ['evm'], label: 'swaps & liquidity via THORChain · free', def: true,
+    scan: async a => { const j = await getJSON(`${MIDGARD}/actions?address=${a.toLowerCase()}&limit=1`, {}, 1); return +j.count || (j.actions || []).length; },
+    fetch: async (a, o) => {
+      const A = a.toLowerCase(), out = [], hx = t => t && !/^0+$/.test(t) ? t.toLowerCase() : '';
+      const {acts} = await midgardActions(A, o);
+      const sum = list => { const m = {}; list.forEach(c => { const k = thorSym(c.asset); m[k] = (m[k] || 0n) + BigInt(c.amount || 0); }); return Object.entries(m).map(([sym, v]) => ({sym, amount: units(v.toString(), 8)})); };
+      const fmt = list => sum(list).map(x => `${fmtNum(x.amount)} ${x.sym}`).join(' + ');
+      const where = list => [...new Set(list.map(c => c.address))].map(x => x.toLowerCase() === A ? 'this wallet' : `${thorChainOf(list.find(c => c.address === x)?.asset)} address ${short(x)}`).join(', ');
+      for (const act of acts) {
+        const md = act.metadata?.[act.type] || {}, pool = (act.pools || []).join(', ');
+        const ins = (act.in || []).flatMap(x => (x.coins || []).map(c => ({...c, address: x.address || '', txID: x.txID})));
+        const outs = (act.out || []).flatMap(x => (x.coins || []).map(c => ({...c, address: x.address || '', txID: x.txID}))).filter(c => +c.amount > 0);
+        const sender = (act.in || [])[0]?.address?.toLowerCase() || '';
+        const inTx = hx((act.in || []).find(x => x.address?.toLowerCase() === A)?.txID || (act.in || [])[0]?.txID);
+        const pend = act.status === 'pending' ? ' Status: pending on THORChain — check the explorer.' : '';
+        const label = {swap: 'swap', addLiquidity: 'liquidity add', withdraw: 'liquidity withdrawal', refund: 'refunded swap', secure: 'secured-asset deposit/withdrawal', trade: 'trade-account deposit/withdrawal'}[act.type] || act.type;
+        // phase 1 — this wallet started it
+        if (sender === A && inTx) {
+          const got = sum(outs), sold = sum(ins);
+          out.push({hash: inTx, phase: 1, apply: (r, ctx) => {
+            if (r.Chain === 'THORChain') return false;
+            if (!r['Sell Currency'] || r['Buy Currency'] || ctx.done.has('in:' + inTx)) return false;
+            if (act.type === 'swap' && got.length === 1 && r.Type === 'Withdrawal') {
+              r.Type = 'Trade'; r.Category = thorApp(md) ? `DeFi - Swap (THORChain via ${thorApp(md)})` : 'DeFi - Swap (THORChain)'; r['Buy Amount'] = got[0].amount; r['Buy Currency'] = got[0].sym; r['Liquidity Pool Address'] = pool;
+              r.Comments = `THORChain swap${thorApp(md) ? ' made in ' + thorApp(md) : ''} via pool ${pool}: sold ${fmt(ins)}, received ${fmt(outs)} at ${where(outs)}.${pend} (Sent to the THORChain router on ${r.Chain}.)`;
+            } else if (act.type === 'swap') {
+              r.Category = 'DeFi - Swap (THORChain)'; r.Comments += ` THORChain swap via ${pool}: sold ${fmt(ins)}; ${outs.length ? `received ${fmt(outs)} at ${where(outs)}` : 'nothing paid out yet'} — check before importing.${pend}`;
+            } else if (act.type === 'addLiquidity') {
+              r.Category = 'DeFi - Liquidity Pool (Add)'; r['Liquidity Pool Address'] = pool; r.Comments = `Added ${fmt(ins)} to THORChain pool ${pool} (sent to the THORChain router on ${r.Chain}).${pend}`;
+            } else if (act.type === 'withdraw') {
+              r.Category = 'DeFi - Liquidity Pool (Remove request)'; r['Liquidity Pool Address'] = pool; r.Comments = `Withdrawal request for THORChain pool ${pool}${md.basisPoints ? ` (${+md.basisPoints / 100}% of the position)` : ''}; the small amount sent only triggers it and is returned. Payout: ${outs.length ? fmt(outs) + ' at ' + where(outs) : 'see the following rows'}.${pend}`;
+            } else if (act.type === 'refund') {
+              r.Category = 'DeFi - Swap (Refunded)'; r.Comments = `THORChain swap of ${fmt(ins)} was refunded${md.reason ? ` (${md.reason})` : ''}; ${outs.length ? `${fmt(outs)} came back` : 'refund not paid out yet'}.${pend}`;
+            } else if (act.type === 'secure' || act.type === 'trade') {
+              r.Category = `Transfer (L1 → ${act.type === 'secure' ? 'Secured Asset' : 'Trade Account'})`; r.Comments = `Moved ${fmt(ins)} into THORChain as a ${act.type === 'secure' ? 'secured asset' : 'trade-account balance'} for ${where(outs) || 'a THORChain address'}. Match with the Deposit there if it is your wallet.${pend}`;
+            } else { r.Comments += ` THORChain ${act.type} via ${pool || 'THORChain'}.${pend}`; }
+            ctx.done.add('in:' + inTx); return true;
+          }});
+        }
+        // phase 2 — payouts to this wallet, and the thor1 copy of a swap this wallet started
+        for (const c of outs.filter(x => x.address.toLowerCase() === A && hx(x.txID))) {
+          const tx = hx(c.txID);
+          out.push({hash: tx, phase: 2, apply: (r, ctx) => {
+            if (r.Chain === 'THORChain' || !r['Buy Currency'] || r['Sell Currency']) return false;
+            const counted = (act.type === 'swap' && ctx.done.has('in:' + hx((act.in || [])[0]?.txID))) || (sender && sender !== A && ctx.thorRun.has(sender) && act.type === 'swap');
+            if (counted) {
+              r.Category = 'Internal - THORChain swap output'; r._internal = true;
+              r.Comments = `Output of the THORChain swap of ${fmt(ins)} started by ${sender === A ? 'this wallet' : short(sender)} — already counted as the Buy side of that Trade, so it is left out of the Excel file. (${fmt([c])} arrived here.)`;
+            } else if (act.type === 'swap') {
+              r.Category = 'DeFi - Swap (THORChain, incoming)'; r.Comments = `Received ${fmt([c])} from a THORChain swap of ${fmt(ins)} sent by ${thorChainOf(ins[0]?.asset)} address ${short(sender)}. If that sender is your own wallet, record the matching sale there.${pend}`;
+            } else if (act.type === 'withdraw') {
+              r.Category = 'DeFi - Liquidity Pool (Remove)'; r['Liquidity Pool Address'] = pool; r.Comments = `Withdrew ${fmt([c])} from THORChain pool ${pool}${md.basisPoints ? ` (${+md.basisPoints / 100}% of the position)` : ''}.`;
+            } else if (act.type === 'refund') {
+              r.Category = 'DeFi - Swap (Refunded)'; r.Comments = `Refund of a THORChain swap of ${fmt(ins)}${md.reason ? ` (${md.reason})` : ''}: ${fmt([c])} came back.`;
+            } else if (act.type === 'secure' || act.type === 'trade') {
+              r.Category = `Transfer (${act.type === 'secure' ? 'Secured Asset' : 'Trade Account'} → L1)`; r.Comments = `Received ${fmt([c])} withdrawn from THORChain by ${short(sender)}. Match with the Withdrawal there if it is your wallet.`;
+            } else { r.Comments += ` Paid out by THORChain (${label}).`; }
+            return true;
+          }});
+        }
+        // the thor1 wallet's "Swap (Incoming)" row for a swap this wallet sold into → already a Trade here
+        if (sender === A && inTx && act.type === 'swap') out.push({hash: inTx, phase: 2, apply: (r, ctx) => {
+          if (r.Chain !== 'THORChain' || r.Category !== 'DeFi - Swap (Incoming)' || !ctx.done.has('in:' + inTx)) return false;
+          r.Category = 'Internal - THORChain swap output'; r._internal = true;
+          r.Comments = `Output of the THORChain swap started by ${short(A)} — already counted as the Buy side of that Trade, so it is left out of the Excel file. ` + r.Comments;
+          return true;
+        }});
+      }
+      return out;
+    }},
+  // Cross-chain services: each record names the sending tx, the arrival tx/chain and what arrived ("xfer").
+  // The page pairs them with your rows: same coin → Bridge pair; different coin → Trade (arrival marked internal).
+  {id: 'lifi', name: 'LI.FI (Jumper & wallets)', families: ['evm', 'sol'], label: 'cross-chain swaps & bridges · free', def: true,
+    scan: async a => (await getJSON(`https://li.quest/v1/analytics/transfers?wallet=${a}`)).transfers?.length || 0,
+    fetch: async (a, o) => {
+      const j = await getJSON(`https://li.quest/v1/analytics/transfers?wallet=${a}`), out = [];
+      for (const t of j.transfers || []) {
+        const sd = t.sending || {}, rc = t.receiving || {};
+        const amt = side => side.token && side.amount ? {amount: units(String(side.amount), side.token.decimals ?? 18), sym: side.token.symbol} : null;
+        out.push(...xferNotes({id: 'lifi-' + (t.transactionId || sd.txHash), via: `LI.FI${t.tool ? ' / ' + t.tool : ''}`, status: t.status,
+          src: {hash: sd.txHash, chainId: sd.chainId}, dst: {hash: rc.txHash, chainId: rc.chainId}, inp: amt(sd), out: amt(rc)}));
+      }
+      return out;
+    }},
+  {id: 'across', name: 'Across', families: ['evm'], label: 'bridge deposits · free', def: true,
+    scan: async a => { const j = await getJSON(`https://app.across.to/api/deposits?depositor=${a}&limit=100`); return (j || []).length >= 100 ? '100+' : (j || []).length; },
+    fetch: async (a, o) => {
+      const out = [], seen = new Set();
+      for (const who of ['depositor', 'recipient']) {
+        for (let p = 0; p < o.maxPages; p++) {
+          const list = await getJSON(`https://app.across.to/api/deposits?${who}=${a}&limit=100&skip=${p * 100}`) || [];
+          for (const d of list) {
+            if (seen.has(d.id)) continue; seen.add(d.id);
+            out.push(...xferNotes({id: 'across-' + d.id, via: 'Across', status: d.status,
+              src: {hash: d.depositTxHash || d.depositTxnRef, chainId: d.originChainId}, dst: {hash: d.fillTx || d.fillTxnRef, chainId: d.destinationChainId},
+              inp: null, out: null}));
+          }
+          if (list.length < 100) break; await sleep(250);
+        }
+      }
+      return out;
+    }},
+  {id: 'axelar', name: 'Axelarscan (Squid)', families: ['evm'], label: 'cross-chain swaps · free', def: true,
+    scan: async a => (await getJSON(`https://api.axelarscan.io/gmp/searchGMP?address=${a}&size=1`)).total || 0,
+    fetch: async (a, o) => {
+      const out = [];
+      for (let p = 0; p < o.maxPages; p++) {
+        const j = await getJSON(`https://api.axelarscan.io/gmp/searchGMP?address=${a}&size=100&from=${p * 100}`), list = j.data || [];
+        for (const d of list) {
+          const c = d.call || {}, ex = d.executed || {};
+          out.push(...xferNotes({id: 'axelar-' + (c._id || c.transactionHash), via: /squid/i.test(JSON.stringify(c.returnValues?.destinationContractAddress || '')) ? 'Squid (Axelar)' : 'Axelar' + (d.symbol ? ' / Squid' : ''),
+            status: d.simplified_status || d.status, src: {hash: c.transactionHash, chainName: c.chain}, dst: {hash: ex.transactionHash, chainName: ex.chain || c.returnValues?.destinationChain},
+            inp: d.symbol && d.amount ? {amount: +d.amount, sym: d.symbol.replace(/^axl/, '')} : null, out: null}));
+        }
+        if (list.length < 100) break; await sleep(250);
+      }
+      return out;
+    }},
   {id: 'debridge', name: 'deBridge', families: ['evm', 'sol'], label: 'cross-chain orders · free', def: true,
     scan: async a => (await postJSON('https://stats-api.dln.trade/api/Orders/filteredList', {creator: a, skip: 0, take: 1})).totalCount || 0,
     fetch: async (a, o) => {
@@ -1512,7 +1814,8 @@ const EXPLORERS = [
           const g = x.giveOfferWithMetadata || {}, t = x.takeOfferWithMetadata || {};
           const gs = g.metadata?.symbol || g.symbol || '?', ts = t.metadata?.symbol || t.symbol || '?';
           const ga = units(big(g.amount), g.metadata?.decimals ?? g.decimals ?? 18), ta = units(big(t.finalAmount || t.amount), t.metadata?.decimals ?? t.decimals ?? 18);
-          out.push({hash: x.createEventTransactionHash?.stringValue, cat: 'Bridge (Outgoing)', comment: `deBridge: ${fmtNum(ga)} ${gs} on ${cname(CHAIN_NAMES, big(g.chainId))} → ${fmtNum(ta)} ${ts} on ${cname(CHAIN_NAMES, big(t.chainId))} (${x.state}). The matching Deposit on the destination chain shows as Transfer In.`});
+          out.push(...xferNotes({id: 'debridge-' + (x.orderId?.stringValue || x.createEventTransactionHash?.stringValue), via: 'deBridge', status: x.state, src: {hash: x.createEventTransactionHash?.stringValue, chainId: +big(g.chainId)},
+            dst: {hash: null, chainId: +big(t.chainId)}, inp: {amount: ga, sym: gs}, out: {amount: ta, sym: ts}}));
         }
         await sleep(250);
       }
@@ -1527,8 +1830,9 @@ const EXPLORERS = [
         for (const m of j.data || []) {
           const pw = m.pathway || {}, app = pw.sender?.name ? ` via ${pw.sender.name}` : '';
           const txt = `LayerZero${app}: ${pw.sender?.chain || pw.srcEid} → ${pw.receiver?.chain || pw.dstEid} (${m.status?.name || m.status || ''}).`;
-          if (m.source?.tx?.txHash) out.push({hash: m.source.tx.txHash, cat: 'Bridge (Outgoing)', comment: txt});
-          if (m.destination?.tx?.txHash) out.push({hash: m.destination.tx.txHash, cat: 'Bridge (Incoming)', comment: txt});
+          out.push(...xferNotes({id: 'lz-' + (m.guid || m.source?.tx?.txHash), via: `LayerZero${app}`, status: m.status?.name || m.status,
+            src: {hash: m.source?.tx?.txHash, chainName: pw.sender?.chain || String(pw.srcEid)}, dst: {hash: m.destination?.tx?.txHash, chainName: pw.receiver?.chain || String(pw.dstEid)}, inp: null, out: null}));
+          void txt;
         }
         next = j.nextToken; if (!next) break; await sleep(250);
       }
@@ -1543,8 +1847,11 @@ const EXPLORERS = [
         for (const op of ops) {
           const sp = op.content?.standarizedProperties || {}, app = (sp.appIds || []).join('/');
           const txt = `Wormhole${app ? ' (' + app + ')' : ''}: ${cname(WH_CHAINS, op.sourceChain?.chainId ?? op.emitterChain)} → ${cname(WH_CHAINS, op.targetChain?.chainId ?? sp.toChain)}${op.data?.tokenAmount ? `, ${op.data.tokenAmount} ${op.data.symbol || ''}` : ''}.`;
-          if (op.sourceChain?.transaction?.txHash) out.push({hash: op.sourceChain.transaction.txHash, cat: 'Bridge (Outgoing)', comment: txt});
-          if (op.targetChain?.transaction?.txHash) out.push({hash: op.targetChain.transaction.txHash, cat: 'Bridge (Incoming)', comment: txt});
+          const tok = op.data?.tokenAmount ? {amount: +op.data.tokenAmount, sym: op.data.symbol || '?'} : null;
+          out.push(...xferNotes({id: 'wh-' + op.id, via: `Wormhole${app ? ' (' + app + ')' : ''}`, status: op.targetChain?.status || '',
+            src: {hash: op.sourceChain?.transaction?.txHash, chainName: cname(WH_CHAINS, op.sourceChain?.chainId ?? op.emitterChain)},
+            dst: {hash: op.targetChain?.transaction?.txHash, chainName: cname(WH_CHAINS, op.targetChain?.chainId ?? sp.toChain)}, inp: tok, out: null, sameToken: true}));
+          void txt;
         }
         if (ops.length < 50) break; await sleep(250);
       }
