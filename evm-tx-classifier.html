@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=45"></script>
+<script src="classifier-chains.js?v=49"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -60,6 +60,7 @@ details.pick>.chains,details.pick>.pickbody{padding:0 10px 10px}
 .pickbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:4px 0 6px}
 .pickbar input{flex:1;min-width:180px;margin:0}
 .pickbar a{cursor:pointer;font-size:13px;white-space:nowrap}
+.importrow{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.importrow input{flex:1;min-width:200px;margin:0}.importrow a{cursor:pointer;font-size:13px}
 .chains label.hide{display:none}
 .scanaddr{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0}
 .scanaddr h3{font-size:13px;margin:0 0 6px;word-break:break-all}
@@ -134,10 +135,13 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <h2>1. Wallets</h2>
     <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor / Substrate), 1… (Polkadot), C…/H… (Kusama), thor1… (THORChain). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
+    <label>Import history files <span class="hint">— optional. Stellar: free Stellar servers keep only ~1 year, so add <b>LedgersTax</b> CSV files (ledgers.tax, one per year — select several at once). They are merged with the live data; nothing is counted twice.</span></label>
+    <div class="importrow"><input type="file" id="importFiles" accept=".csv,text/csv" multiple><a id="importClear" hidden>remove files</a></div>
+    <div class="hint" id="importInfo"></div>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
       <div><label>To date <span class="hint">(optional)</span></label><input type="date" id="dTo"></div>
-      <div><label>Max pages per list</label><input type="number" id="maxPages" value="40" min="1" max="500"></div>
+      <div><label>Max pages per list</label><input type="number" id="maxPages" value="500" min="1" max="5000"></div>
     </div>
     <label class="check"><input type="checkbox" id="utc" checked> Show dates in UTC (untick for your local time zone)</label>
     <label class="check"><input type="checkbox" id="exSpam"> Leave "Scam/Spam" rows out of the Excel file <span class="hint">("Possible Spam (review)" rows are always kept)</span></label>
@@ -427,15 +431,21 @@ async function fetchEtherscanLike(chain, addr, opt, baseUrl, keyQ, label) {
   const a = lc(addr), map = new Map(), OFF = 1000;
   let cutoff = null;
   const paged = async (action, optional) => {
-    const out = []; const maxP = Math.min(opt.maxPages, 10);
+    // Etherscan-style APIs stop at 10,000 rows (page × offset). Past that, continue with older blocks (endblock).
+    const out = []; const maxP = opt.maxPages; let endQ = '', pg = 0;
     for (let page = 1; page <= maxP; page++) {
+      pg++; if (pg > 10) {
+        const lastBlock = +out[out.length - 1].blockNumber; if (!lastBlock) break;
+        while (out.length && +out[out.length - 1].blockNumber === lastBlock) out.pop();   // that block is fetched again in full
+        endQ = `&endblock=${lastBlock}`; pg = 1;
+      }
       let j;
-      try { j = await getJSON(`${baseUrl}&module=account&action=${action}&address=${addr}&page=${page}&offset=${OFF}&sort=desc${keyQ}`, {}, optional ? 2 : 5); }
+      try { j = await getJSON(`${baseUrl}&module=account&action=${action}&address=${addr}&page=${pg}&offset=${OFF}&sort=desc${endQ}${keyQ}`, {}, optional ? 2 : 5); }
       catch (e) { if (optional && !/Stopped/.test(e.message)) { log(`   ⚠ ${label} ${action}: not available (${e.message.slice(0, 50)})`, 'w'); break; } throw e; } // older explorers lack the NFT lists
       if (j.status !== '1') {
         const msg = typeof j.result === 'string' ? j.result : j.message;
         if (/no (internal )?(transactions|records)/i.test(`${j.message} ${msg}`)) break;
-        if (/rate limit/i.test(msg)) { await sleep(1500); page--; continue; }
+        if (/rate limit/i.test(msg)) { await sleep(1500); page--; pg--; continue; }
         if (optional) { log(`   ⚠ ${label} ${action}: ${msg}`, 'w'); break; }
         throw new Error(`${label}: ${msg}`);
       }
@@ -588,7 +598,7 @@ function spamReason(b, a, ins, outs, used) {
   const look = ins.find(LOOKALIKE); if (look && !outs.length) return `lookalike token "${look.sym}" using look-alike foreign characters to imitate a real token`;
   if (!ins.length || outs.length) return '';
   if (ins.every(l => l.kind !== 'native' && l.amount === 0)) return 'zero-value token transfer (address-poisoning attack)';
-  const bad = ins.find(l => l.spam); if (bad) return `token ${bad.sym} is flagged as scam/spam by the explorer`;
+  const bad = ins.find(l => l.spam); if (bad) return b.flags[0] || `token ${bad.sym} is flagged as scam/spam by the explorer`;
   const sus = ins.find(l => l.kind !== 'native' && (SPAM_RX.test(l.sym) || SPAM_RX.test(l.name)));
   if (sus) return `unsolicited token with a phishing-style name ("${(sus.name || sus.sym).slice(0, 60)}")`;
   if (b.flags.length) return b.flags[0];
@@ -762,6 +772,77 @@ function classify(b, ctx) {
 
 /* ---------------- Run ---------------- */
 let RESULT = [], WALLETS = [];
+/* ---------- Imported history files (LedgersTax "Summ" CSV for Stellar) ---------- */
+let IMPORTS = []; // [{file, chainId, addr, rows}]
+const IMPORT_CHAINS = {stellarnetwork: 'xlm', stellar: 'xlm'};
+function parseCSV(text) {
+  const out = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; }
+    else if (c === '"') q = true; else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); cell = ''; if (row.some(x => x !== '')) out.push(row); row = []; }
+    else cell += c;
+  }
+  row.push(cell); if (row.some(x => x !== '')) out.push(row);
+  const head = (out.shift() || []).map(h => h.replace(/^﻿/, '').trim());
+  return out.map(r => Object.fromEntries(head.map((h, k) => [h, (r[k] ?? '').trim()])));
+}
+async function loadImports(files) {
+  const added = [];
+  for (const f of files) {
+    const rows = parseCSV(await f.text());
+    if (!rows.length || !('Blockchain' in rows[0]) || !('Base Currency' in rows[0])) { log(`⚠ ${f.name}: not a LedgersTax (Summ) CSV — skipped.`, 'w'); continue; }
+    const chainId = IMPORT_CHAINS[lc(rows[0].Blockchain)]; if (!chainId) { log(`⚠ ${f.name}: blockchain "${rows[0].Blockchain}" is not supported for import — skipped.`, 'w'); continue; }
+    const cnt = {}; rows.forEach(r => [r.From, r.To].forEach(a => { if (a) cnt[a] = (cnt[a] || 0) + 1; }));
+    const fromName = (f.name.match(/^G[A-Z2-7]{55}/) || [])[0];
+    const addr = fromName || Object.entries(cnt).sort((x, y) => y[1] - x[1])[0]?.[0];
+    IMPORTS = IMPORTS.filter(x => x.file !== f.name); IMPORTS.push({file: f.name, chainId, addr, rows}); added.push(addr);
+  }
+  const box = $('addrs'), have = new Set(box.value.split(/[\s,;]+/).filter(Boolean));
+  for (const a of new Set(added)) if (a && !have.has(a)) box.value = (box.value.trim() ? box.value.trim() + '\n' : '') + a;
+  showImports();
+}
+function showImports() {
+  $('importClear').hidden = !IMPORTS.length;
+  if (!IMPORTS.length) { $('importInfo').textContent = ''; return; }
+  const by = {}; IMPORTS.forEach(x => { const k = x.addr; by[k] = by[k] || {n: 0, files: 0, min: '9', max: '0'}; by[k].files++; by[k].n += x.rows.length;
+    x.rows.forEach(r => { const d = (r['Timestamp (UTC)'] || '').slice(0, 10); if (d && d < by[k].min) by[k].min = d; if (d > by[k].max) by[k].max = d; }); });
+  $('importInfo').textContent = '✓ Imported: ' + Object.entries(by).map(([a, v]) => `Stellar ${short(a)} — ${v.files} file(s), ${v.n.toLocaleString()} rows, ${v.min} to ${v.max}`).join(' · ') + '. Press ① Scan, then ② Fetch.';
+}
+// Turn imported rows into the same "buckets" the live fetchers produce and add the ones the live data lacks.
+async function mergeImports(chain, addr, txs, opt) {
+  const mine = IMPORTS.filter(x => x.chainId === chain.id && x.addr === addr); if (!mine.length) return txs;
+  const have = new Set(txs.map(b => lc(b.hash))), map = new Map();
+  const leg = (dir, sym, amount, cp) => sym === chain.native || !sym ? {...natLeg(chain, dir, amount, cp)} : {dir, amount, sym, name: sym, token: 'imp:' + sym, kind: 'token', id: null, cp, spam: false};
+  for (const x of mine) for (const r of x.rows) {
+    const h = r.ID; if (!h || have.has(lc(h))) continue;
+    const ts = new Date((r['Timestamp (UTC)'] || '').replace(' ', 'T').replace(/Z?$/, 'Z')); if (isNaN(ts)) continue;
+    let b = map.get(h); if (!b) { b = {hash: h, ts, from: '', to: '', toName: '', method: 'transfer', ok: true, fee: 0, legs: [], initKnown: true, flags: [], url: chain.txUrl ? chain.txUrl(h) : '', desc: 'imported from LedgersTax file (older history)'}; map.set(h, b); }
+    const t = lc(r.Type), bA = +r['Base Amount'] || 0, bC = r['Base Currency'], qA = +r['Quote Amount'] || 0, qC = r['Quote Currency'];
+    if (/^(income|receive|deposit|airdrop|staking|reward|mining|interest|gift)/.test(t)) {
+      const amt = qA || bA, sym = qC || bC; if (!amt) continue;
+      b.legs.push(leg('in', sym, amt, r.From)); if (!b.from) b.from = r.From;
+      if (sym === chain.native && amt < 0.01 && r.From !== addr) b.possibleSpam = 'tiny unsolicited payment — typical Stellar advertising/spam (often with a link in the memo)';
+    } else if (/^(send|withdraw|payment|spend|lost|donation)/.test(t) && !r.To && (bC || qC || chain.native) === chain.native && (bA || qA) < 0.1) {
+      b.from = addr; b.fee = Math.max(b.fee || 0, bA || qA);   // LedgersTax lists the network fee as its own "send" row with no recipient
+    } else if (/^(send|withdraw|payment|spend|lost|donation)/.test(t)) {
+      const amt = bA || qA, sym = bC || qC; if (amt) b.legs.push(leg('out', sym, amt, r.To)); b.from = addr; b.to = r.To;
+    } else if (t === 'buy' || t === 'sell' || t === 'trade') {
+      const buy = t === 'sell' ? [qC, qA] : [bC, bA], sell = t === 'sell' ? [bC, bA] : [qC, qA];
+      if (buy[1]) b.legs.push(leg('in', buy[0], buy[1], '')); if (sell[1]) b.legs.push(leg('out', sell[0], sell[1], '')); b.from = addr; b.method = 'swap';
+    } else if (/fee/.test(t)) { b.from = addr; }
+    if (r['Fee Amount'] && +r['Fee Amount'] > 0 && (!r['Fee Currency'] || r['Fee Currency'] === chain.native) && (b.from === addr || /send|fee|buy|sell|trade/.test(t))) { b.fee = Math.max(b.fee || 0, +r['Fee Amount']); b.from = addr; } // same fee may also appear as its own row
+  }
+  const add = [...map.values()].filter(b => b.legs.length || b.fee).sort((x, y) => x.ts - y.ts);
+  // Same spam check as the live Stellar data: StellarExpert's public directory flags malicious senders.
+  if (chain.id === 'xlm' && typeof sxDirectory === 'function') { try {
+    const dir = await sxDirectory([...new Set(add.flatMap(b => b.legs.map(l => l.cp)))]);
+    for (const b of add) for (const l of b.legs) { const d = dir[l.cp]; if (d) { l.cpName = d.name; if ((d.tags || []).some(t => /malicious|unsafe|scam|phishing/.test(t))) { l.spam = true; b.flags.push(`StellarExpert tags ${d.name || short(l.cp)} as ${d.tags.join('/')}`); } } }
+  } catch (e) {} }
+  if (add.length) log(`   + ${add.length} older transaction(s) from imported file(s), ${add[0].ts.toISOString().slice(0, 10)} to ${add[add.length - 1].ts.toISOString().slice(0, 10)}.`, 'g');
+  return [...txs, ...add];
+}
 // Section 2: collapsible groups with "x of y ticked", a search box and select/clear/expand-all.
 function setupPicker() {
   const sec = $('chainList').closest('section');
@@ -794,7 +875,7 @@ function selectedChains() {
   return list;
 }
 function getOpt() {
-  return {maxPages: Math.max(1, +$('maxPages').value || 40), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
+  return {maxPages: Math.min(5000, Math.max(1, +$('maxPages').value || 500)), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
     heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(), taostatsKey: $('taostatsKey').value.trim(), subscanKey: $('subscanKey').value.trim(),
     from: $('dFrom').value ? new Date($('dFrom').value + 'T00:00:00Z') : null, to: $('dTo').value ? new Date($('dTo').value + 'T23:59:59Z') : null};
 }
@@ -947,6 +1028,7 @@ async function run() {
       let res;
       try { log(`▶ ${wname} (${chain.name}, ${short(addr)}): fetching…`); res = await fetchAny(chain, addr, opt); }
       catch (e) { if (e.message === 'Stopped') throw e; log(`   ${wname}: ${e.message}`, 'e'); WALLETS.push({chain: chain.name, wallet: wname, addr, rows: 0, note: 'Error: ' + e.message}); continue; }
+      if (IMPORTS.length) res.txs = await mergeImports(chain, addr, res.txs, opt);
       const txs = res.txs.filter(b => (!opt.from || b.ts >= opt.from) && (!opt.to || b.ts <= opt.to)).sort((x, y) => x.ts - y.ts);
       const usedTokens = new Set(); res.txs.forEach(b => { if (b.from === addr) b.legs.forEach(l => { if (l.dir === 'out') usedTokens.add(l.token); }); });
       let count = 0;
@@ -1142,6 +1224,8 @@ function saveKeys() {
     ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}${c.moralis && c.src !== 'moralis' ? ' · Moralis when key entered' : ''}</small></span></label>`).join('') + '</div></details>').join('');
   $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
   setupPicker();
+  $('importFiles').onchange = e => loadImports([...e.target.files]);
+  $('importClear').onclick = () => { IMPORTS = []; $('importFiles').value = ''; showImports(); };
   try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('subscanKey').value = k.su || ''; $('remember').checked = true; } } catch {}
   $('scan').onclick = scan;
   $('run').onclick = run;

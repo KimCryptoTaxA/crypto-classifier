@@ -861,7 +861,13 @@ async function fetchStellar(chain, addr, opt) {
     }
     return out;
   };
-  const ops = new Map((await pages('operations?join=transactions&include_failed=true')).map(o => [o.id, o]));
+  const opList = await pages('operations?join=transactions&include_failed=true');
+  const ops = new Map(opList.map(o => [o.id, o]));
+  // Free Horizon servers keep only ~1 year. If the account's creation is not in the list, older history is missing.
+  if (!cutoff && opList.length && !opList.some(o => o.type === 'create_account' && o.account === addr) && !(opt.from && new Date(opList[opList.length - 1].created_at) <= opt.from)) {
+    const oldest = opList[opList.length - 1].created_at.slice(0, 10);
+    log(`   ⚠ Stellar: the free Stellar servers only keep about 1 year of history — nothing before ${oldest} was found for this account. Older transactions are missing; see stellar.expert for the full history.`, 'w');
+  }
   const effects = await pages('effects');
   const opOf = e => BigInt(e.id.split('-')[0]).toString();
   for (const id of [...new Set(effects.map(opOf))].filter(id => !ops.has(id)).slice(0, 100)) {
