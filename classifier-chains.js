@@ -300,10 +300,21 @@ const XPUB_CACHE = new Map(); // xpub -> address list from the scan, reused by t
 async function xpubAddresses(x, log2) {
   if (XPUB_CACHE.has(x)) return XPUB_CACHE.get(x);
   const root = await xpubNode(x), found = [], GAP = 20;
-  for (const branch of [0, 1]) {
+  // A plain "xpub" can hold legacy, native-SegWit or nested-SegWit addresses: peek at the first 5 receive addresses of each.
+  let kinds = [root.kind];
+  if (root.kind === 'xpub') {
+    const r0 = await ckdPub(root, 0); kinds = [];
+    for (const k of ['xpub', 'zpub', 'ypub']) {
+      for (let i = 0; i < 5; i++) { const ad = await xpubAddress((await ckdPub(r0, i)).key, k); const j = await esploraGet(`/address/${ad}`);
+        if ((j.chain_stats?.tx_count || 0) + (j.mempool_stats?.tx_count || 0)) { kinds.push(k); break; } await sleep(150); }
+    }
+    if (!kinds.length) kinds = ['xpub'];
+    if (log2) log2(`   xpub address types with history: ${kinds.map(k => ({xpub: 'legacy (1…)', zpub: 'native SegWit (bc1q…)', ypub: 'nested SegWit (3…)'})[k]).join(', ')}`);
+  }
+  for (const kind of kinds) for (const branch of [0, 1]) {
     const bn = await ckdPub(root, branch); let gap = 0;
     for (let i = 0; gap < GAP && i < 2000; i++) {
-      const addr = await xpubAddress((await ckdPub(bn, i)).key, root.kind);
+      const addr = await xpubAddress((await ckdPub(bn, i)).key, kind);
       const j = await esploraGet(`/address/${addr}`);
       const n = (j.chain_stats?.tx_count || 0) + (j.mempool_stats?.tx_count || 0);
       found.push({addr, n, path: `${branch}/${i}`});
@@ -341,10 +352,28 @@ async function fetchXpubLocal(chain, x, opt) {
   return trimToCutoff(utxoBuckets(chain, txs, own, x), cutoff);
 }
 const BLOCKBOOK = 'https://btc1.trezor.io/api/v2';
+// An "xpub" may belong to any address type: wallets such as Ledger, Exodus or Electrum export SegWit accounts as xpub too.
+// Blockbook takes output descriptors, so every type is checked and the ones with history are used.
+const XPUB_FORMS = new Map();
+async function xpubForms(x) {
+  if (XPUB_FORMS.has(x)) return XPUB_FORMS.get(x);
+  const forms = /^xpub/.test(x) ? [x, `wpkh(${x})`, `sh(wpkh(${x}))`, `tr(${x})`] : [x];
+  const found = [];
+  for (const f of forms) { try { const j = await getJSON(proxied(`${BLOCKBOOK}/xpub/${encodeURIComponent(f)}?details=basic`)); if (+j.txs > 0) found.push({form: f, txs: +j.txs}); } catch (e) {} }
+  XPUB_FORMS.set(x, found); return found;
+}
+const XPUB_TYPE = f => /^tr\(/.test(f) ? 'Taproot (bc1p…)' : /^sh\(wpkh/.test(f) ? 'nested SegWit (3…)' : /^wpkh/.test(f) ? 'native SegWit (bc1q…)' : 'legacy (1…)';
 async function fetchXpub(chain, x, opt) {
+  const forms = (await xpubForms(x)).map(f => f.form);
+  if (forms.length > 1 || (forms[0] && forms[0] !== x)) log(`   xpub address types with history: ${forms.map(XPUB_TYPE).join(', ')}`);
+  const all = []; for (const f of forms.length ? forms : [x]) all.push(...await fetchXpubForm(chain, f, opt, x));
+  const seen = new Map(); all.forEach(b => { if (!seen.has(b.hash)) seen.set(b.hash, b); });
+  return [...seen.values()];
+}
+async function fetchXpubForm(chain, x, opt, me = x) {
   const own = new Set(), raw = []; let cutoff = null, pages = 1;
   for (let p = 1; p <= Math.min(pages, opt.maxPages); p++) {
-    const j = await getJSON(proxied(`${BLOCKBOOK}/xpub/${x}?details=txs&tokens=used&page=${p}&pageSize=100`));
+    const j = await getJSON(proxied(`${BLOCKBOOK}/xpub/${encodeURIComponent(x)}?details=txs&tokens=used&page=${p}&pageSize=100`));
     (j.tokens || []).forEach(t => own.add(t.name)); pages = j.totalPages || 1;
     raw.push(...(j.transactions || []));
     const last = raw[raw.length - 1];
@@ -354,7 +383,7 @@ async function fetchXpub(chain, x, opt) {
   }
   const mark = io => { const a = io.addresses?.[0] || ''; if (io.isOwn) own.add(a); return {addr: a, value: (+io.value || 0) / 1e8}; };
   const txs = raw.filter(t => t.blockTime).map(t => ({hash: t.txid, ts: new Date(t.blockTime * 1000), fee: (+t.fees || 0) / 1e8, ins: t.vin.map(mark), outs: t.vout.map(mark)}));
-  return trimToCutoff(utxoBuckets(chain, txs, own, x), cutoff);
+  return trimToCutoff(utxoBuckets(chain, txs, own, me), cutoff);
 }
 async function fetchDoge(chain, addr, opt) {
   const raw = []; let before = null, cutoff = null;
@@ -1762,7 +1791,7 @@ const NONEVM_CHAINS = [
     // xpub: the addresses are worked out in the browser; Trezor Blockbook (via the helper) is only a faster extra when the helper runs.
     scan: async (a) => {
       if (/^[xyz]pub/.test(a)) {
-        if (HELPER) { try { const j = await getJSON(proxied(`${BLOCKBOOK}/xpub/${a}?details=basic`)); return {active: j.txs > 0, count: j.txs}; } catch (e) {} }
+        if (HELPER) { try { const f = await xpubForms(a); const n = f.reduce((s2, x) => s2 + x.txs, 0); return {active: n > 0, count: n, note: f.length ? f.map(x => XPUB_TYPE(x.form)).join(', ') : ''}; } catch (e) {} }
         const all = await xpubAddresses(a); const used = all.filter(x => x.n); return {active: used.length > 0, count: used.reduce((s, x) => s + x.n, 0), note: `${used.length} used address(es)`};
       }
       return scanEsplora('https://mempool.space/api', a); },

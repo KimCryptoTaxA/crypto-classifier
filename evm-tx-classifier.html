@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=41"></script>
+<script src="classifier-chains.js?v=44"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -241,7 +241,8 @@ const CHAINS = [
   {id:'fuse',   name:'Fuse',             code:'FUSE',   native:'FUSE', src:'blockscout', chainid:122,    url:'https://explorer.fuse.io',        def:true},
   {id:'mantle', name:'Mantle',           code:'MNT',    native:'MNT',  src:'routescan',  chainid:5000,   explorer:'https://mantlescan.xyz', def:true},
   {id:'blast',  name:'Blast',            code:'BLAST',  native:'ETH',  src:'routescan',  chainid:81457,  explorer:'https://blastscan.io',   def:true},
-  {id:'metis',  name:'Metis',            code:'METIS',  native:'METIS',src:'routescan',  chainid:1088,   explorer:'https://andromeda-explorer.metis.io', def:true},
+  {id:'metis',  name:'Metis',            code:'METIS',  native:'METIS',src:'routescan',  chainid:1088,   explorer:'https://andromeda-explorer.metis.io', def:true,
+   esApi:'https://andromeda-explorer.metis.io/api?', label:'Metis explorer · free (helper) — Routescan dropped Metis'},
   {id:'xdc',    name:'XDC Network',      code:'XDC',    native:'XDC',  src:'keyed', chainid:50,  debank:'xdc', explorer:'https://xdcscan.com', def:true, label:'needs free Etherscan key'},
   {id:'filevm', name:'Filecoin EVM',     code:'FILEVM', native:'FIL',  src:'blockscout', chainid:314,  url:'https://filecoin.blockscout.com', def:true},
   {id:'iotaevm',name:'IOTA EVM',         code:'IOTAEVM',native:'IOTA', src:'blockscout', chainid:8822, url:'https://explorer.evm.iota.org',   def:true},
@@ -254,6 +255,8 @@ const CHAINS = [
   {id:'seievm', name:'Sei EVM',          code:'SEIEVM', native:'SEI',  src:'moralis', chainid:1329,  moralis:'sei',     explorer:'https://seitrace.com', def:true},
   {id:'monad',  name:'Monad',            code:'MON',    native:'MON',  src:'moralis', chainid:143,   moralis:'monad',   explorer:'https://monadscan.com', def:true},
 ].map(c => ({...c, moralis: c.moralis || MORALIS_IDS[c.id], family: 'evm', group: 'EVM chains', txUrl: c.txUrl || (h => (c.explorer || c.url) + '/tx/' + h)}));
+// Etherscan-style API: Routescan, or a chain's own explorer (Metis) that browsers can only reach through the helper.
+const rsBase = chain => chain.esApi ? proxied(chain.esApi) : `https://api.routescan.io/v2/network/mainnet/evm/${chain.chainid}/etherscan/api?`;
 const SRC_LABEL = {blockscout:'Blockscout · free', routescan:'Routescan · free', keyed:'needs Etherscan or DeBank key', gno:'free with Blockscout PRO key, or Etherscan/DeBank key', moralis:'needs Moralis key'};
 const ALL_CHAINS = [...CHAINS, ...NONEVM_CHAINS];
 const COLS = ['Type','Category','Buy Amount','Buy Currency','Sell Amount','Sell Currency','Fee Amount','Fee Currency',
@@ -426,10 +429,12 @@ async function fetchEtherscanLike(chain, addr, opt, baseUrl, keyQ, label) {
   const paged = async (action, optional) => {
     const out = []; const maxP = Math.min(opt.maxPages, 10);
     for (let page = 1; page <= maxP; page++) {
-      const j = await getJSON(`${baseUrl}&module=account&action=${action}&address=${addr}&page=${page}&offset=${OFF}&sort=desc${keyQ}`);
+      let j;
+      try { j = await getJSON(`${baseUrl}&module=account&action=${action}&address=${addr}&page=${page}&offset=${OFF}&sort=desc${keyQ}`, {}, optional ? 2 : 5); }
+      catch (e) { if (optional && !/Stopped/.test(e.message)) { log(`   ⚠ ${label} ${action}: not available (${e.message.slice(0, 50)})`, 'w'); break; } throw e; } // older explorers lack the NFT lists
       if (j.status !== '1') {
         const msg = typeof j.result === 'string' ? j.result : j.message;
-        if (/no (transactions|records)/i.test(`${j.message} ${msg}`)) break;
+        if (/no (internal )?(transactions|records)/i.test(`${j.message} ${msg}`)) break;
         if (/rate limit/i.test(msg)) { await sleep(1500); page--; continue; }
         if (optional) { log(`   ⚠ ${label} ${action}: ${msg}`, 'w'); break; }
         throw new Error(`${label}: ${msg}`);
@@ -532,8 +537,8 @@ async function fetchChain(chain, addr, opt) {
   }
   if (chain.src === 'blockscout') return {txs: await fetchBlockscout(chain, addr, opt, false), via: 'Blockscout'};
   if (chain.src === 'routescan') {
-    const base = `https://api.routescan.io/v2/network/mainnet/evm/${chain.chainid}/etherscan/api?`;
-    return {txs: await fetchEtherscanLike(chain, addr, opt, base, '', 'Routescan'), via: 'Routescan'};
+    const base = rsBase(chain);
+    return {txs: await fetchEtherscanLike(chain, addr, opt, base, '', chain.esApi ? 'Metis explorer' : 'Routescan'), via: chain.esApi ? 'Metis explorer (via helper)' : 'Routescan'};
   }
   const es = opt.esKey, db = opt.dbKey; let lastErr;
   if (es) {
@@ -832,7 +837,7 @@ async function scanEvm(chain, addr, opt) {
   }
   if (chain.src === 'keyed' && proBase) { const r = await bs(proBase, proQ).catch(() => null); if (r) return r; }
   if (chain.src === 'routescan' || (chain.src === 'keyed' && opt.esKey)) {
-    const base = chain.src === 'routescan' ? `https://api.routescan.io/v2/network/mainnet/evm/${chain.chainid}/etherscan/api?` : `https://api.etherscan.io/v2/api?chainid=${chain.chainid}&apikey=${encodeURIComponent(opt.esKey)}`;
+    const base = chain.src === 'routescan' ? rsBase(chain) : `https://api.etherscan.io/v2/api?chainid=${chain.chainid}&apikey=${encodeURIComponent(opt.esKey)}`;
     let any = 0;
     for (const action of ['txlist', 'tokentx']) {
       const j = await getJSON(`${base}&module=account&action=${action}&address=${addr}&page=1&offset=1`);
