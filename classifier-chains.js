@@ -30,6 +30,52 @@ async function b58checkEncode(body, alpha = B58) {
   const h = await sha256(await sha256(body)); const out = new Uint8Array(body.length + 4);
   out.set(body); out.set(h.slice(0, 4), body.length); return b58encode(out, alpha);
 }
+/* ---------- Substrate (Polkadot-family) SS58 addresses: one key, a different prefix per chain ---------- */
+function blake2b(input, outlen = 64) { // RFC 7693, BigInt version (only used on short inputs)
+  const M = (1n << 64n) - 1n, IV = [0x6a09e667f3bcc908n, 0xbb67ae8584caa73bn, 0x3c6ef372fe94f82bn, 0xa54ff53a5f1d36f1n, 0x510e527fade682d1n, 0x9b05688c2b3e6c1fn, 0x1f83d9abfb41bd6bn, 0x5be0cd19137e2179n];
+  const S = [[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3],[11,8,12,0,5,2,15,13,10,14,3,6,7,1,9,4],[7,9,3,1,13,12,11,14,2,6,5,10,4,0,15,8],[9,0,5,7,2,4,10,15,14,1,11,12,6,8,3,13],[2,12,6,10,0,11,8,3,4,13,7,5,15,14,1,9],[12,5,1,15,14,13,4,10,0,7,6,3,9,2,8,11],[13,11,7,14,12,1,3,9,5,0,15,4,8,6,2,10],[6,15,14,9,11,3,0,8,12,2,13,7,1,4,10,5],[10,2,8,4,7,6,1,5,15,11,9,14,3,12,13,0]];
+  const rotr = (x, n) => ((x >> n) | (x << (64n - n))) & M;
+  const h = IV.slice(); h[0] ^= 0x01010000n ^ BigInt(outlen);
+  const blocks = Math.max(1, Math.ceil(input.length / 128)); let t = 0n;
+  for (let b = 0; b < blocks; b++) {
+    const chunk = new Uint8Array(128); chunk.set(input.slice(b * 128, b * 128 + 128));
+    const last = b === blocks - 1; t += BigInt(last ? input.length - b * 128 : 128);
+    const m = []; for (let i = 0; i < 16; i++) { let w = 0n; for (let k = 7; k >= 0; k--) w = (w << 8n) | BigInt(chunk[i * 8 + k]); m.push(w); }
+    const v = [...h, ...IV]; v[12] ^= t & M; v[13] ^= t >> 64n; if (last) v[14] ^= M;
+    const G = (a, b2, c, d, x, y) => { v[a] = (v[a] + v[b2] + x) & M; v[d] = rotr(v[d] ^ v[a], 32n); v[c] = (v[c] + v[d]) & M; v[b2] = rotr(v[b2] ^ v[c], 24n);
+      v[a] = (v[a] + v[b2] + y) & M; v[d] = rotr(v[d] ^ v[a], 16n); v[c] = (v[c] + v[d]) & M; v[b2] = rotr(v[b2] ^ v[c], 63n); };
+    for (let r = 0; r < 12; r++) { const s2 = S[r % 10];
+      G(0, 4, 8, 12, m[s2[0]], m[s2[1]]); G(1, 5, 9, 13, m[s2[2]], m[s2[3]]); G(2, 6, 10, 14, m[s2[4]], m[s2[5]]); G(3, 7, 11, 15, m[s2[6]], m[s2[7]]);
+      G(0, 5, 10, 15, m[s2[8]], m[s2[9]]); G(1, 6, 11, 12, m[s2[10]], m[s2[11]]); G(2, 7, 8, 13, m[s2[12]], m[s2[13]]); G(3, 4, 9, 14, m[s2[14]], m[s2[15]]); }
+    for (let i = 0; i < 8; i++) h[i] ^= v[i] ^ v[i + 8];
+  }
+  const out = new Uint8Array(outlen); for (let i = 0; i < outlen; i++) out[i] = Number((h[i >> 3] >> BigInt(8 * (i & 7))) & 255n); return out;
+}
+const SS58PRE = new TextEncoder().encode('SS58PRE');
+function ss58Decode(s) {
+  if (!/^[1-9A-HJ-NP-Za-km-z]{45,50}$/.test(s)) return null;
+  const d = b58decode(s); if (!d || (d.length !== 35 && d.length !== 36)) return null;
+  const pl = d[0] < 64 ? 1 : 2; if (d[0] >= 128 || d.length - pl - 2 !== 32) return null;
+  const prefix = pl === 1 ? d[0] : (((d[0] & 0x3f) << 2) | (d[1] >> 6)) | ((d[1] & 0x3f) << 8);
+  const body = d.slice(0, d.length - 2), cs = blake2b(new Uint8Array([...SS58PRE, ...body]));
+  if (cs[0] !== d[d.length - 2] || cs[1] !== d[d.length - 1]) return null;
+  return {prefix, pub: d.slice(pl, pl + 32)};
+}
+function ss58Encode(prefix, pub) {
+  const p = prefix < 64 ? [prefix] : [((prefix & 0xfc) >> 2) | 0x40, (prefix >> 8) | ((prefix & 0x03) << 6)];
+  const body = new Uint8Array([...p, ...pub]), cs = blake2b(new Uint8Array([...SS58PRE, ...body]));
+  return b58encode(new Uint8Array([...body, cs[0], cs[1]]));
+}
+const SS58_NAMES = {0: 'Polkadot', 2: 'Kusama', 42: 'generic Substrate / Bittensor'};
+// Nomination-pool accounts are derived from "modlpy/nopls" + type (0 = bonded stake, 1 = reward) + pool id.
+// Staking reward pots ("modlpy/stkng" + era) pay Asset Hub staking rewards since the 2025 migration.
+function poolAccount(addr) {
+  const d = ss58Decode(addr || ''); if (!d) return null;
+  const tag = new TextDecoder().decode(d.pub.slice(0, 12));
+  if (tag === 'modlpy/stkng') return {type: 'staking'};
+  if (tag !== 'modlpy/nopls') return null;
+  return {type: d.pub[12] === 1 ? 'reward' : 'bonded', id: d.pub[13] | (d.pub[14] << 8) | (d.pub[15] << 16) | (d.pub[16] << 24)};
+}
 const BECH = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 function bechPolymod(v) {
   const G = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]; let c = 1;
@@ -83,8 +129,8 @@ async function detectAddress(s) {
   if (/^[A-Z2-7]{58}$/.test(s)) return {family: 'algo', addr: s, label: 'Algorand'};
   if (/^f(0\d+|1[a-z2-7]{39}|2[a-z2-7]{39}|3[a-z2-7]{84}|410f[a-z2-7]{39,})$/.test(s)) return {family: 'fil', addr: s, label: 'Filecoin'};
   if (/^(01[0-9a-fA-F]{64}|02[0-9a-fA-F]{66})$/.test(s)) return {family: 'cspr', addr: s.toLowerCase(), label: 'Casper'};
-  // Bittensor uses Substrate SS58 addresses with the generic prefix 42: 48 characters starting with 5
-  if (/^5[1-9A-HJ-NP-Za-km-z]{47}$/.test(s)) { const d = b58decode(s); if (d && d.length === 35 && d[0] === 42) return {family: 'tao', addr: s, label: 'Bittensor (SS58)'}; }
+  // Substrate SS58 (Polkadot 1…, Kusama C…/H…, generic/Bittensor 5…, parachains …): the same key works on every chain
+  if (/^[1-9A-HJ-NP-Za-km-z]{45,50}$/.test(s)) { const d = ss58Decode(s); if (d) return {family: 'substrate', addr: s, pub: d.pub, prefix: d.prefix, label: `Substrate (${SS58_NAMES[d.prefix] || 'prefix ' + d.prefix})`}; }
   if (/^@?[a-z1-5.]{1,12}$/.test(s) && !/\.$/.test(s)) return {family: 'xpr', addr: s.replace(/^@/, ''), label: 'XPR Network account'};
   if (/^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,112}$/.test(s)) return {family: 'btc', addr: s, xpub: true, label: 'Bitcoin ' + s.slice(0, 4)};
   if (/^(addr1|stake1)[0-9a-z]{40,}$/.test(s)) return {family: 'ada', addr: s, label: 'Cardano'};
@@ -114,6 +160,7 @@ async function detectAddress(s) {
 // 8-bit bytes -> 5-bit bech32 words
 function toWords(bytes) { let acc = 0, bits = 0; const out = []; for (const b of bytes) { acc = (acc << 8) | b; bits += 8; while (bits >= 5) { bits -= 5; out.push((acc >> bits) & 31); } } if (bits) out.push((acc << (5 - bits)) & 31); return out; }
 function chainAddr(chain, det) {
+  if (chain.family === 'substrate') { if (det.family === 'substrate' && !chain.evmAccounts) return chain.ss58 == null ? det.addr : ss58Encode(chain.ss58, det.pub); if (det.family === 'evm' && chain.evmAccounts) return det.addr; return null; }
   if (chain.family === 'hbar' && det.family === 'evm') return det.addr; // Hedera accounts also have a 0x… EVM address
   // Kava and Injective accounts share their bytes with the 0x… address of the same key
   if (chain.family === 'cosmos' && chain.evm && det.family === 'evm') return bech32Encode(chain.hrp, toWords(hexToBytes(det.addr.slice(2))));
@@ -1223,6 +1270,183 @@ async function fetchThor(chain, addr, opt) {
   return trimToCutoff([...map.values()], cutoff);
 }
 
+/* ---------- Polkadot & Kusama (Statescan — free, no key). History lives on the relay chain until the Asset Hub
+   migration (Nov 2025) and on Asset Hub after it, so both are read and merged. ---------- */
+const STATESCAN = {
+  dot: {dec: 10, sides: [{tag: 'relay', name: 'Polkadot relay chain', api: 'https://polkadot-api.statescan.io', gql: 'https://ddd-gh-api.statescan.io/graphql', site: 'https://polkadot.statescan.io'},
+                         {tag: 'ah', name: 'Polkadot Asset Hub', api: 'https://ahp-api.statescan.io', gql: 'https://ahp-gh-api.statescan.io/graphql', site: 'https://assethub-polkadot.statescan.io', assets: true}]},
+  ksm: {dec: 12, sides: [{tag: 'relay', name: 'Kusama relay chain', api: 'https://kusama-api.statescan.io', gql: 'https://ksm-gh-api.statescan.io/graphql', site: 'https://kusama.statescan.io'},
+                         {tag: 'ah', name: 'Kusama Asset Hub', api: 'https://statemine-api.statescan.io', gql: 'https://statemine-gh-api.statescan.io/graphql', site: 'https://assethub-kusama.statescan.io', assets: true}]},
+};
+const subBig = v => { try { return BigInt(typeof v === 'number' ? Math.round(v) : String(v ?? '0')); } catch { return 0n; } };
+const gqlPost = (url, query, variables = {}) => postJSON(url, {query, variables}).then(j => { if (j.errors?.length) throw new Error(j.errors[0].message); return j.data; });
+const evArg = (ev, name) => (ev.args || ev.data || []).find?.(a => a.name === name)?.value;
+const SUB_LABEL = {staking: 'Polkadot staking', nominationPools: 'Polkadot staking pool (nomination pool)', polkadotXcm: 'XCM cross-chain transfer (bridge)', xcmPallet: 'XCM cross-chain transfer (bridge)', xTokens: 'XCM cross-chain transfer (bridge)',
+  crowdloan: 'Crowdloan', convictionVoting: 'OpenGov voting', democracy: 'Democracy voting', proxy: 'Proxy', utility: 'Batch', assetConversion: 'Asset Hub DEX (asset conversion swap)', vesting: 'Vesting', identity: 'On-chain identity'};
+async function scanStatescan(cfg, a) {
+  let n = 0, active = false;
+  for (const sd of cfg.sides) {
+    try { const j = await getJSON(`${sd.api}/accounts/${a}/transfers?page=0&page_size=1`, {}, 2); n += +j.total || 0; } catch (e) {}
+    try { const j = await getJSON(`${sd.api}/accounts/${a}/extrinsics?page=0&page_size=1`, {}, 2); n += +j.total || 0; } catch (e) {}
+    try { const acc = await getJSON(`${sd.api}/accounts/${a}`, {}, 2); if (subBig(acc?.data?.total) > 0n) active = true; } catch (e) {}
+  }
+  return {active: active || n > 0, count: n || (active ? '✓' : 0)};
+}
+async function fetchStatescan(chain, a, opt) {
+  const cfg = STATESCAN[chain.id], map = new Map(), dec = cfg.dec, sym = chain.native; let cutoff = null, feeLookups = 0;
+  const inRange = ms => !(opt.from && ms < +opt.from) && !(opt.to && ms > +opt.to);
+  const assetMeta = new Map(), payoutSeen = new Set();
+  for (const sd of cfg.sides) {
+    const key = (h, i) => `${sd.tag}:${h}-${i}`;
+    const mk = (ix, hash) => { const b = bucket(map, key(ix.blockHeight, ix.extrinsicIndex ?? ix.eventIndex)); if (!b.ts) { b.ts = new Date(ix.blockTime); b.url = ix.extrinsicIndex != null ? `${sd.site}/#/extrinsics/${ix.blockHeight}-${ix.extrinsicIndex}` : `${sd.site}/#/events/${ix.blockHeight}-${ix.eventIndex}`; b.toName = b.toName || ''; b.side = sd.name; } if (hash) b.hash2 = hash; return b; };
+    const pages = async (fn, what) => { const out = []; for (let p = 0; p < opt.maxPages; p++) { const {items, total} = await fn(p); out.push(...items); const last = items[items.length - 1];
+      if (!items.length || out.length >= total) break; const ts = last?.indexer?.blockTime; if (opt.from && ts && ts < +opt.from) break;
+      if (p === opt.maxPages - 1 && ts) { const c = new Date(ts); if (!cutoff || c > cutoff) cutoff = c; log(`   ⚠ ${sd.name} ${what}: page limit reached.`, 'w'); } await sleep(150); } return out; };
+    // 1. signed transactions (method, success, fee from their events)
+    const exts = await pages(async p => { const j = await getJSON(`${sd.api}/accounts/${a}/extrinsics?page=${p}&page_size=100`); return {items: j.items || [], total: +j.total || 0}; }, 'transactions');
+    for (const x of exts) {
+      if (!inRange(x.indexer.blockTime)) continue;
+      const b = mk(x.indexer, x.hash); b.from = a; b.initKnown = true; b.ok = x.isSuccess !== false; b.method = `${x.section}.${x.method}`;
+      b.toName = SUB_LABEL[x.section] || ''; if (x.section === 'utility') { const inner = JSON.stringify(x.args || '').match(/"section":"(\w+)"/); if (inner && SUB_LABEL[inner[1]]) b.toName = SUB_LABEL[inner[1]]; }
+      if (feeLookups < 600) {
+        feeLookups++; if (feeLookups % 50 === 0) log(`   ${chain.name}: reading fees… ${feeLookups}`);
+        try {
+          const evs = await getJSON(`${sd.api}/extrinsics/${x.indexer.blockHeight}-${x.indexer.extrinsicIndex}/events`); const list = evs.items || evs || [];
+          const fe = list.find(e => e.method === 'TransactionFeePaid' && evArg(e, 'who') === a);
+          if (fe) b.fee = units((subBig(evArg(fe, 'actual_fee')) + subBig(evArg(fe, 'tip'))).toString(), dec);
+          else { const w = list.find(e => e.section === 'balances' && e.method === 'Withdraw' && evArg(e, 'who') === a); if (w) b.fee = units(subBig(evArg(w, 'amount')).toString(), dec); } // before 2022
+          for (const e of list) {
+            if (e.section === 'nominationPools' && e.method === 'PaidOut' && evArg(e, 'member') === a && !list.some(t => t.method === 'Transfer')) {
+              b.preRows = b.preRows || []; b.preRows.push({type: 'Staking', cat: 'Staking Rewards (nomination pool)', buy: natLeg(chain, 'in', units(subBig(evArg(e, 'payout')).toString(), dec), ''), sell: null, lp: '',
+                comment: `Nomination pool #${evArg(e, 'pool_id') ?? evArg(e, 'poolId') ?? '?'} paid out rewards (${sd.name}).`});
+            }
+          }
+          if (/^staking\.(bond|bondExtra|unbond|rebond|nominate|chill|setPayee|withdrawUnbonded)$/.test(b.method) && !list.some(e => e.method === 'Transfer')) {
+            const amt = list.find(e => e.section === 'staking' && /Bonded|Unbonded|Withdrawn/.test(e.method)); const v = amt ? units(subBig(evArg(amt, 'amount')).toString(), dec) : 0;
+            b.noValue = {cat: `Staking (${x.method})`, comment: `${x.section}.${x.method}${v ? ` ${v} ${sym}` : ''} — the ${sym} stays in your account (locked/unlocked for staking), no transfer. Fee only.`};
+          }
+          await sleep(80);
+        } catch (e) {}
+      } else if (feeLookups === 600) { feeLookups++; log(`   ${chain.name}: more than 600 transactions — fees after the first 600 are not read.`, 'w'); }
+    }
+    // 2. native transfers
+    const trs = await pages(async p => { const j = await getJSON(`${sd.api}/accounts/${a}/transfers?page=${p}&page_size=100`); return {items: j.items || [], total: +j.total || 0}; }, 'transfers');
+    for (const t of trs) {
+      if (t.isNativeAsset === false || !inRange(t.indexer.blockTime)) continue;
+      const b = mk(t.indexer); const amt = units(subBig(t.balance).toString(), dec); if (!amt) continue;
+      const pool = poolAccount(t.from === a ? t.to : t.from);
+      if (pool && t.to === a && pool.type === 'staking') {  // staking reward paid from the era's reward pot
+        payoutSeen.add(`${sd.tag}:${t.indexer.blockHeight}:${subBig(t.balance)}`);
+        b.preRows = b.preRows || []; b.preRows.push({type: 'Staking', cat: 'Staking Rewards', buy: natLeg(chain, 'in', amt, t.from), sell: null, lp: '', comment: `Staking reward paid out by the ${sd.name} staking reward pot.`});
+        continue;
+      }
+      if (pool && t.to === a && pool.type === 'reward') {   // pool rewards paid out (claimed by you or automatically)
+        b.preRows = b.preRows || []; b.preRows.push({type: 'Staking', cat: 'Staking Rewards (nomination pool)', buy: natLeg(chain, 'in', amt, t.from), sell: null, lp: '', comment: `Nomination pool #${pool.id} reward paid out (${sd.name}).`});
+        continue;
+      }
+      if (pool) b.toName = `Polkadot staking pool (nomination pool #${pool.id})`;
+      if (t.from === a && t.to !== a) { b.legs.push(natLeg(chain, 'out', amt, t.to)); b.from = a; b.to = b.to || t.to; }
+      else if (t.to === a && t.from !== a) { b.legs.push(natLeg(chain, 'in', amt, t.from)); if (!b.from) b.from = t.from; }
+      if (!b.method) b.method = 'transfer';
+    }
+    // 3. tokens on Asset Hub (USDt, USDC, bridged assets)
+    if (sd.assets) for (const kind of ['assetTransfers', 'foreignAssetTransfers']) {
+      const list = await pages(async p => { const d = await gqlPost(sd.gql, `query($a:String,$o:Int!,$l:Int!){ ${kind}(address:$a, offset:$o, limit:$l) { total transfers { from to balance assetId indexer { blockHeight blockTime extrinsicIndex eventIndex } } } }`, {a, o: p * 100, l: 100});
+        return {items: d[kind].transfers || [], total: +d[kind].total || 0}; }, 'token transfers').catch(e => { log(`   ${sd.name} tokens: ${e.message.slice(0, 80)}`, 'w'); return []; });
+      for (const t of list) {
+        if (!inRange(t.indexer.blockTime)) continue;
+        const id = String(t.assetId);
+        if (!assetMeta.has(id)) { try { const d = await gqlPost(sd.gql, kind === 'assetTransfers' ? `query($i:Int!){ asset(id:$i) { metadata { symbol decimals } } }` : `query($i:String!){ foreignAsset(id:$i) { metadata { symbol decimals } } }`, {i: kind === 'assetTransfers' ? +id : id});
+          assetMeta.set(id, (d.asset || d.foreignAsset)?.metadata || {}); } catch (e) { assetMeta.set(id, {}); } }
+        const m = assetMeta.get(id), b = mk(t.indexer), amt = units(subBig(t.balance).toString(), m.decimals ?? 0), tsym = m.symbol || `asset ${id.slice(0, 10)}`;
+        const leg = {dir: t.from === a ? 'out' : 'in', amount: amt, sym: tsym, name: tsym, token: id, kind: 'token', id: null, cp: t.from === a ? t.to : t.from, spam: false};
+        if (t.from === a && t.to === a) continue; b.legs.push(leg); if (!b.method) b.method = 'transfer';
+        if (t.from === a) { b.from = a; b.to = b.to || t.to; } else if (!b.from) b.from = t.from;
+      }
+    }
+    // 4. staking rewards (one row each — the time sets the cost basis)
+    const rw = await pages(async p => { const d = await gqlPost(sd.gql, `query($a:String,$o:Int!,$l:Int!){ stakingRewards(address:$a, offset:$o, limit:$l) { total items { amount era validator dest indexer { blockHeight blockTime eventIndex extrinsicIndex } } } }`, {a, o: p * 100, l: 100});
+      return {items: d.stakingRewards.items || [], total: +d.stakingRewards.total || 0}; }, 'staking rewards').catch(e => { log(`   ${sd.name} rewards: ${e.message.slice(0, 80)}`, 'w'); return []; });
+    for (const r of rw) {
+      if (!inRange(r.indexer.blockTime) || subBig(r.amount) === 0n || payoutSeen.has(`${sd.tag}:${r.indexer.blockHeight}:${subBig(r.amount)}`)) continue; // already a row from its payout transfer
+      const b = bucket(map, `${sd.tag}:reward-${r.indexer.blockHeight}-${r.indexer.eventIndex}`); b.ts = new Date(r.indexer.blockTime); b.url = `${sd.site}/#/events/${r.indexer.blockHeight}-${r.indexer.eventIndex}`;
+      const dest = r.dest?.account ? `paid to ${r.dest.account === a ? 'this account' : r.dest.account}` : r.dest && JSON.stringify(r.dest).includes('Staked') ? 'added to your stake' : 'paid to this account';
+      b.preRows = [{type: 'Staking', cat: 'Staking Rewards', buy: natLeg(chain, 'in', units(subBig(r.amount).toString(), dec), r.validator || ''), sell: null, lp: '',
+        comment: `Staking reward for era ${r.era} from validator ${short(r.validator || '')} (${sd.name}), ${dest}.`}];
+    }
+  }
+  const out = [...map.values()].filter(b => b.ts).map(b => { if (b.hash2) { b.url = b.url; b.hash = b.hash2; } else if (/^(relay|ah):/.test(b.hash)) b.hash = b.hash.replace(/^relay:/, 'relay-').replace(/^ah:/, 'assethub-'); return b; });
+  return trimToCutoff(out, cutoff);
+}
+
+/* ---------- Other Substrate chains (Subscan — free API key) ---------- */
+// [subdomain, name, code, native symbol, decimals, accounts are 0x (EVM-style)]
+const SUBSCAN_NETS = [
+  ['astar', 'Astar', 'ASTR', 'ASTR', 18], ['shiden', 'Shiden', 'SDN', 'SDN', 18], ['moonbeam', 'Moonbeam', 'GLMR', 'GLMR', 18, true], ['moonriver', 'Moonriver', 'MOVR', 'MOVR', 18, true],
+  ['bifrost', 'Bifrost', 'BNC', 'BNC', 12], ['centrifuge', 'Centrifuge', 'CFG', 'CFG', 18], ['altair', 'Altair', 'AIR', 'AIR', 18], ['avail', 'Avail', 'AVAIL', 'AVAIL', 18],
+  ['vara', 'Vara', 'VARA', 'VARA', 12], ['enjin', 'Enjin Relaychain', 'ENJ', 'ENJ', 18], ['matrix', 'Enjin Matrixchain', 'ENJM', 'ENJ', 18], ['peaq', 'peaq', 'PEAQ', 'PEAQ', 18],
+  ['mythos', 'Mythos', 'MYTH', 'MYTH', 18, true], ['darwinia', 'Darwinia', 'RING', 'RING', 18, true], ['crust', 'Crust', 'CRU', 'CRU', 12], ['crust-parachain', 'Crust Polkadot', 'CRUP', 'CRU', 12],
+  ['autonomys', 'Autonomys', 'AI3', 'AI3', 18], ['humanode', 'Humanode', 'HMND', 'HMND', 18], ['polymesh', 'Polymesh', 'POLYX', 'POLYX', 6], ['energywebx', 'Energy Web X', 'EWX', 'EWT', 18],
+  ['people-polkadot', 'Polkadot People', 'PPL', 'DOT', 10], ['coretime-polkadot', 'Polkadot Coretime', 'PCT', 'DOT', 10], ['bridgehub-polkadot', 'Polkadot BridgeHub', 'PBH', 'DOT', 10],
+  ['collectives-polkadot', 'Polkadot Collectives', 'PCOL', 'DOT', 10], ['people-kusama', 'Kusama People', 'KPPL', 'KSM', 12], ['coretime-kusama', 'Kusama Coretime', 'KCT', 'KSM', 12],
+  ['bridgehub-kusama', 'Kusama BridgeHub', 'KBH', 'KSM', 12],
+];
+const SUBSCAN_META = new Map(); // network -> {prefix}
+async function subscanPost(net, path, body, key) {
+  for (let k = 0; k < 6; k++) {
+    const r = await fetch(`https://${net}.api.subscan.io${path}`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-API-Key': key}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 429 || j.code === 20008) { await sleep(1500 * (k + 1)); continue; }              // free plan: a few requests per second
+    if (j.code === 403 || r.status === 401 || r.status === 403) throw new Error('Subscan key rejected: ' + (j.message || r.status));
+    if (j.code && j.code !== 0) { if (/not found|record not found/i.test(j.message || '')) return null; throw new Error('Subscan: ' + (j.message || j.code)); }
+    return j.data;
+  }
+  throw new Error('Subscan is busy (rate limit) — try again in a minute');
+}
+async function subscanAddr(chain, det, key) { // re-encode the key in this chain's own address format
+  if (chain.evmAccounts) return det.family === 'evm' ? det.addr : null;
+  if (det.family !== 'substrate') return null;
+  if (!SUBSCAN_META.has(chain.net)) { try { const m = await subscanPost(chain.net, '/api/scan/metadata', {}, key); SUBSCAN_META.set(chain.net, {prefix: +m?.addressType}); } catch (e) { SUBSCAN_META.set(chain.net, {prefix: NaN}); } }
+  const p = SUBSCAN_META.get(chain.net).prefix; return Number.isFinite(p) ? ss58Encode(p, det.pub) : det.addr;
+}
+async function fetchSubscan(chain, a, opt) {
+  const key = opt.subscanKey, net = chain.net, map = new Map(), dec = chain.dec; let cutoff = null;
+  const inRange = ms => !(opt.from && ms < +opt.from) && !(opt.to && ms > +opt.to);
+  const pages = async (path, listKey, what, extra = {}) => { const out = [];
+    for (let p = 0; p < opt.maxPages; p++) { const d = await subscanPost(net, path, {address: a, row: 100, page: p, ...extra}, key); const list = (d && (d[listKey] || d.list)) || []; out.push(...list);
+      if (list.length < 100) break; const ts = (list[list.length - 1].block_timestamp || 0) * 1000; if (opt.from && ts < +opt.from) break;
+      if (p === opt.maxPages - 1) { const c = new Date(ts); if (!cutoff || c > cutoff) cutoff = c; log(`   ⚠ ${chain.name} ${what}: page limit reached.`, 'w'); } await sleep(250); }
+    return out; };
+  const exts = await pages('/api/v2/scan/extrinsics', 'extrinsics', 'transactions');
+  for (const x of exts) {
+    const ts = x.block_timestamp * 1000; if (!inRange(ts)) continue;
+    const b = bucket(map, x.extrinsic_hash || x.extrinsic_index); b.ts = new Date(ts); b.from = a; b.initKnown = true; b.ok = x.success !== false;
+    b.method = `${x.call_module}.${x.call_module_function}`; b.fee = units(String(x.fee_used || x.fee || '0'), dec); b.url = `https://${net}.subscan.io/extrinsic/${x.extrinsic_hash || x.extrinsic_index}`;
+    const mod = String(x.call_module || ''); b.toName = SUB_LABEL[mod] || (/dapp|staking|collator|parachainstaking|delegat/i.test(mod) ? `${chain.name} staking` : /xcm|xtokens|bridge/i.test(mod) ? 'XCM cross-chain transfer (bridge)' : /dex|swap|router|amm|omnipool/i.test(mod) ? `${chain.name} DEX swap` : '');
+  }
+  const trs = await pages('/api/v2/scan/transfers', 'transfers', 'transfers');
+  for (const t of trs) {
+    const ts = t.block_timestamp * 1000; if (!inRange(ts) || t.success === false) continue;
+    const h = t.hash || t.extrinsic_index; const b = bucket(map, h); if (!b.ts) { b.ts = new Date(ts); b.url = `https://${net}.subscan.io/extrinsic/${h}`; }
+    const amt = +t.amount || (t.amount_v2 ? units(String(t.amount_v2), t.decimals ?? dec) : 0); if (!amt) continue;
+    const tsym = t.asset_symbol || chain.native, native = !t.asset_symbol || t.asset_symbol === chain.native;
+    const fromMe = lc(t.from) === lc(a), toMe = lc(t.to) === lc(a); if (fromMe && toMe) continue;
+    const leg = native ? natLeg(chain, fromMe ? 'out' : 'in', amt, fromMe ? t.to : t.from) : {dir: fromMe ? 'out' : 'in', amount: amt, sym: tsym, name: tsym, token: t.asset_unique_id || tsym, kind: 'token', id: null, cp: fromMe ? t.to : t.from, spam: false};
+    leg.cpName = (fromMe ? t.to_account_display : t.from_account_display)?.display || '';
+    b.legs.push(leg); if (fromMe) { b.from = a; b.to = b.to || t.to; } else if (!b.from) b.from = t.from; if (!b.method) b.method = 'transfer';
+  }
+  let rw = [];
+  try { rw = await pages('/api/v2/scan/account/reward_slash', 'list', 'staking rewards', {category: 'Reward'}); }
+  catch (e) { try { rw = await pages('/api/scan/account/reward_slash', 'list', 'staking rewards', {category: 'Reward'}); } catch (e2) { log(`   ${chain.name} rewards: ${e2.message.slice(0, 80)}`, 'w'); } }
+  for (const r of rw) {
+    const ts = r.block_timestamp * 1000; if (!inRange(ts) || /slash/i.test(r.event_id || '')) continue;
+    const b = bucket(map, `reward-${r.event_index || r.extrinsic_hash || ts}`); b.ts = new Date(ts); b.url = `https://${net}.subscan.io/account/${a}?tab=reward`;
+    b.preRows = [{type: 'Staking', cat: 'Staking Rewards', buy: natLeg(chain, 'in', units(String(r.amount || '0'), dec), r.validator_stash || r.stash || ''), sell: null, lp: '',
+      comment: `${chain.name} staking reward${r.era != null ? ' for era ' + r.era : ''}${r.module_id ? ` (${r.module_id}.${r.event_id})` : ''}.`}];
+  }
+  return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
+}
+
 /* ---------- XPR Network (Hyperion history API used by explorer.xprnetwork.org) ---------- */
 const XPR_HYP = 'https://hyp-xpr.api.mainnet.metalx.com';
 const XPR_NAMES = {eosio: 'XPR system (staking/resources)', 'eosio.token': 'XPR token', 'eosio.stake': 'XPR staking', 'eosio.ram': 'XPR RAM', alcor: 'Alcor DEX', dex: 'Metal X DEX',
@@ -1618,7 +1842,13 @@ const NONEVM_CHAINS = [
       } catch (e) { if (/HTTP 4|HTTP 5/.test(e.message)) return {active: false, count: 0, note: 'no such account'}; throw e; }
     },
     fetch: (a, o) => fetchXpr(NONEVM_BY_ID.xpr, a, o)},
-  {id: 'tao', name: 'Bittensor', code: 'TAO', native: 'TAO', family: 'tao', group: 'Other chains', def: true, label: 'Taostats · needs Taostats key',
+  {id: 'dot', name: 'Polkadot', code: 'DOT', native: 'DOT', family: 'substrate', ss58: 0, group: 'Polkadot & Substrate', def: true, label: 'Statescan · free, no key (relay chain + Asset Hub)',
+    txUrl: h => 'https://assethub-polkadot.statescan.io/#/extrinsics/' + h,
+    scan: async a => scanStatescan(STATESCAN.dot, a), fetch: (a, o) => fetchStatescan(NONEVM_BY_ID.dot, a, o)},
+  {id: 'ksm', name: 'Kusama', code: 'KSM', native: 'KSM', family: 'substrate', ss58: 2, group: 'Polkadot & Substrate', def: true, label: 'Statescan · free, no key (relay chain + Asset Hub)',
+    txUrl: h => 'https://assethub-kusama.statescan.io/#/extrinsics/' + h,
+    scan: async a => scanStatescan(STATESCAN.ksm, a), fetch: (a, o) => fetchStatescan(NONEVM_BY_ID.ksm, a, o)},
+  {id: 'tao', name: 'Bittensor', code: 'TAO', native: 'TAO', family: 'substrate', ss58: 42, group: 'Polkadot & Substrate', def: true, label: 'Taostats · needs Taostats key',
     txUrl: h => 'https://taostats.io/extrinsic/' + h,
     scan: async (a, o) => {
       if (!o.taostatsKey) return {status: 'needs key', note: 'Taostats key'};
@@ -1631,6 +1861,13 @@ const NONEVM_CHAINS = [
     scan: async a => { const j = await getJSON(`${MIDGARD}/actions?address=${a}&limit=1`); const n = +j.count || (j.actions || []).length; return {active: n > 0, count: n}; },
     fetch: (a, o) => fetchThor(NONEVM_BY_ID.thor, a, o)},
 ];
+NONEVM_CHAINS.push(...SUBSCAN_NETS.map(([net, name, code, sym, dec, evm]) => ({id: 'ss_' + net, net, name, code, native: sym, dec, family: 'substrate', evmAccounts: !!evm, group: 'Polkadot & Substrate', def: true,
+  label: `Subscan · free key${evm ? ' · 0x accounts' : ''}`, txUrl: h => `https://${net}.subscan.io/extrinsic/${h}`,
+  addrFor: (det, o) => subscanAddr(NONEVM_BY_ID['ss_' + net], det, o.subscanKey),
+  scan: async (a, o) => { if (!o.subscanKey) return {status: 'needs key', note: 'Subscan key'};
+    const d = await subscanPost(net, '/api/v2/scan/search', {key: a}, o.subscanKey); const acc = d?.account; if (!acc) return {active: false, count: 0};
+    const n = (+acc.count_extrinsic || 0) + (+acc.transfer_count || 0); return {active: n > 0 || +acc.balance > 0, count: n || '✓'}; },
+  fetch: (a, o) => fetchSubscan(NONEVM_BY_ID['ss_' + net], a, o)})));
 const NONEVM_BY_ID = Object.fromEntries(NONEVM_CHAINS.map(c => [c.id, c]));
 
 /* ---------- Bridge / NFT / DeFi explorers (add detail to rows by transaction hash) ---------- */

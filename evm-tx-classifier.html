@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=34"></script>
+<script src="classifier-chains.js?v=41"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -48,6 +48,19 @@ tr.spam td{color:var(--mute)}
 a{color:var(--acc)}
 .group{margin:10px 0 4px;font-size:12px;font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;display:flex;gap:10px;align-items:center}
 .group a{font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer}
+details.pick{border:1px solid var(--line);border-radius:9px;margin:8px 0;background:var(--card)}
+details.pick>summary{cursor:pointer;padding:10px 12px;display:flex;gap:10px;align-items:center;font-weight:600;list-style:none;flex-wrap:wrap}
+details.pick>summary::-webkit-details-marker{display:none}
+details.pick>summary::before{content:"▸";color:var(--mute);transition:transform .15s}
+details.pick[open]>summary::before{transform:rotate(90deg)}
+details.pick>summary small{font-weight:400}
+details.pick>summary a{font-weight:400;font-size:12px;cursor:pointer}
+.pcount{margin-left:auto;font-weight:400;font-size:12px;color:var(--mute);white-space:nowrap}
+details.pick>.chains,details.pick>.pickbody{padding:0 10px 10px}
+.pickbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:4px 0 6px}
+.pickbar input{flex:1;min-width:180px;margin:0}
+.pickbar a{cursor:pointer;font-size:13px;white-space:nowrap}
+.chains label.hide{display:none}
 .scanaddr{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0}
 .scanaddr h3{font-size:13px;margin:0 0 6px;word-break:break-all}
 .scanaddr .fam{color:var(--mute);font-weight:400}
@@ -81,7 +94,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <div>
       <h3>Steps</h3>
       <ol>
-        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper). Tick “Remember keys”. Never share your keys.</li>
+        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains). Tick “Remember keys”. Never share your keys.</li>
         <li><b>Paste wallet addresses</b> in section 1, one per line, any chains mixed. Optional: From/To dates (e.g. one tax year).</li>
         <li><b>Click ① Scan.</b> Each address shows its chains: ✓ active, — none, ⚠ error, 🔑 needs a key. Untick what you don't want.</li>
         <li><b>Click ② Fetch &amp; classify ticked.</b> Big wallets take a few minutes. If the log says “Page limit reached”, raise <i>Max pages per list</i> or run one date range at a time.</li>
@@ -96,7 +109,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>Buy Amount &amp; Currency, Sell Amount &amp; Currency, Fee Amount &amp; Currency, Exchange/Wallet Name, Comments, Date (mm-dd-yyyy hh:mm:ss, UTC by default), Liquidity Pool Address, Transaction Hash</li>
         <li><b>Exchange/Wallet Name</b>: chain code + last 6 characters of the address, e.g. <code>ETH_518dda</code></li>
         <li>Plain-language Comments, Chain, Wallet Address and an Explorer Link for every row; plus Summary and Wallets sheets</li>
-        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR, Bittensor, THORChain</li>
+        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR, Bittensor, THORChain, Polkadot, Kusama and 27 more Substrate chains</li>
       </ul>
     </div>
     <div>
@@ -107,7 +120,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>Bridges appear as two rows, one on each chain. Cross-chain swaps (LI.FI, Across, Squid, deBridge, THORChain…) become one Trade; the arriving row is marked Internal.</li>
         <li>ChangeNOW-style swaps are paired by time (sale up to 3 hours before the payout) — rows marked “(review)” are best guesses.</li>
         <li>Very active wallets may hit the page limit; the log warns you.</li>
-        <li>Kava isn't supported. Solana, Casper, Bittensor, BNB Chain and the Moralis-only chains need a key.</li>
+        <li>Kava isn't supported. Solana, Casper, Bittensor, BNB Chain, the Moralis-only chains and the Subscan chains need a key (Polkadot and Kusama don't).</li>
         <li>Cardano, Casper, exchange labels and the Blockscout PRO key need the Crypto Validation Database or the Mac helper. Bitcoin xpub/zpub works everywhere (slower without the helper).</li>
         <li>Free API limits apply per key, so use your own.</li>
       </ul>
@@ -119,7 +132,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 <div class="grid">
   <section class="card">
     <h2>1. Wallets</h2>
-    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor), thor1… (THORChain). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
+    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor / Substrate), 1… (Polkadot), C…/H… (Kusama), thor1… (THORChain). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
@@ -133,11 +146,17 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 
   <section class="card">
     <h2>2. Blockchains &amp; explorers to check</h2>
+    <p class="hint" style="margin:0 0 8px">Usually nothing to change: <b>① Scan</b> only checks the chains that fit each address and shows where it is active. Open a group to fine-tune.</p>
+    <div class="pickbar">
+      <input id="chainFilter" type="search" placeholder="Search chains &amp; lookups… e.g. base, polkadot, bridge, key" autocomplete="off">
+      <a id="pickAll">select all</a><a id="pickNone">clear all</a><a id="pickOpen">expand all</a>
+    </div>
     <div id="chainList"></div>
-    <div class="group">Bridge / NFT / DeFi explorers <span class="hint" style="text-transform:none;letter-spacing:0;font-weight:400">— add detail to matching transactions</span></div>
-    <div class="chains" id="explorerList"></div>
-    <label>Custom Blockscout explorers <span class="hint">— one per line: CODE, https://explorer-url, NATIVE_SYMBOL</span></label>
-    <textarea id="custom" style="min-height:54px" placeholder="KAVA, https://kavascan.com, KAVA"></textarea>
+    <details class="pick" id="exPick"><summary><span>Swap, bridge &amp; label lookups</span><small class="hint">add detail to matching transactions</small><span class="pcount" id="pc_ex"></span><a data-ex="1">all</a><a data-ex="0">none</a></summary>
+      <div class="chains" id="explorerList"></div></details>
+    <details class="pick" id="customPick"><summary><span>Custom Blockscout explorers</span><small class="hint">advanced</small><span class="pcount" id="pc_custom"></span></summary>
+      <div class="pickbody"><label style="margin-top:0">One per line: CODE, https://explorer-url, NATIVE_SYMBOL</label>
+      <textarea id="custom" style="min-height:54px" placeholder="ZORA, https://zora.blockscout.com, ETH"></textarea></div></details>
   </section>
 
   <section class="card">
@@ -146,6 +165,8 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <input type="password" id="moralisKey" autocomplete="off">
     <label>Taostats API key <span class="hint">— free tier at taostats.io (dash.taostats.io); needed for Bittensor (TAO)</span></label>
     <input type="password" id="taostatsKey" autocomplete="off">
+    <label>Subscan API key <span class="hint">— free at support.subscan.io (“API key”); needed for the Substrate chains (Astar, Moonbeam, Bifrost, Centrifuge, Avail, Vara, Enjin, peaq…). Polkadot &amp; Kusama work without it.</span></label>
+    <input type="password" id="subscanKey" autocomplete="off">
     <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
     <input type="password" id="heliusKey" autocomplete="off">
     <div class="row">
@@ -736,6 +757,29 @@ function classify(b, ctx) {
 
 /* ---------------- Run ---------------- */
 let RESULT = [], WALLETS = [];
+// Section 2: collapsible groups with "x of y ticked", a search box and select/clear/expand-all.
+function setupPicker() {
+  const sec = $('chainList').closest('section');
+  const count = () => {
+    sec.querySelectorAll('#chainList details.pick').forEach(d => { const cbs = [...d.querySelectorAll('input[type=checkbox]')]; d.querySelector('.pcount').textContent = `${cbs.filter(c => c.checked).length} of ${cbs.length} ticked`; });
+    const ex = [...$('explorerList').querySelectorAll('input')]; $('pc_ex').textContent = `${ex.filter(c => c.checked).length} of ${ex.length} on`;
+    const n = $('custom').value.split('\n').filter(l => l.trim()).length; $('pc_custom').textContent = n ? `${n} added` : 'none';
+  };
+  sec.addEventListener('change', count); $('custom').addEventListener('input', count);
+  sec.querySelectorAll('summary a').forEach(a => a.onclick = e => { e.preventDefault(); e.stopPropagation();
+    const box = a.dataset.ex ? $('explorerList') : a.closest('details'); box.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = (a.dataset.v ?? a.dataset.ex) === '1'); count(); });
+  const all = v => { sec.querySelectorAll('#chainList input[type=checkbox], #explorerList input').forEach(cb => cb.checked = v); count(); };
+  $('pickAll').onclick = () => all(true); $('pickNone').onclick = () => all(false);
+  $('pickOpen').onclick = () => { const ds = [...sec.querySelectorAll('details.pick')], open = !ds.every(d => d.open); ds.forEach(d => d.open = open); $('pickOpen').textContent = open ? 'collapse all' : 'expand all'; };
+  $('chainFilter').oninput = () => {
+    const q = $('chainFilter').value.trim().toLowerCase();
+    sec.querySelectorAll('details.pick').forEach(d => {
+      let hits = 0; d.querySelectorAll('.chains label').forEach(l => { const m = !q || l.textContent.toLowerCase().includes(q) || d.querySelector('summary').textContent.toLowerCase().includes(q); l.classList.toggle('hide', !m); if (m) hits++; });
+      if (q) { d.open = hits > 0; d.style.display = hits || d.id === 'customPick' && !q ? '' : 'none'; } else { d.style.display = ''; d.querySelectorAll('.hide').forEach(l => l.classList.remove('hide')); }
+    });
+  };
+  count();
+}
 function selectedChains() {
   const list = ALL_CHAINS.filter(c => $('ch_' + c.id)?.checked);
   for (const line of $('custom').value.split('\n')) {
@@ -746,7 +790,7 @@ function selectedChains() {
 }
 function getOpt() {
   return {maxPages: Math.max(1, +$('maxPages').value || 40), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
-    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(), taostatsKey: $('taostatsKey').value.trim(),
+    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(), taostatsKey: $('taostatsKey').value.trim(), subscanKey: $('subscanKey').value.trim(),
     from: $('dFrom').value ? new Date($('dFrom').value + 'T00:00:00Z') : null, to: $('dTo').value ? new Date($('dTo').value + 'T23:59:59Z') : null};
 }
 
@@ -827,6 +871,7 @@ async function scan() {
     const entry = {input, det, items: [], explorers: []}; SCAN.push(entry);
     if (!det.family) { log(`⚠ ${input}: address format not recognised`, 'w'); continue; }
     const targets = chains.map(c => ({chain: c, addr: chainAddr(c, det)})).filter(t => t.addr);
+    for (const t of targets) if (t.chain.addrFor && opt.subscanKey) { try { t.addr = (await t.chain.addrFor(det, opt)) || t.addr; } catch (e) {} } // chain's own address format
     if (!targets.length) { log(`⚠ ${short(input)} (${det.label}): none of the ticked chains use this address type`, 'w'); continue; }
     log(`▶ ${short(input)} (${det.label}): checking ${targets.length} chain(s)…`);
     // check up to 4 chains at a time
@@ -1082,17 +1127,17 @@ function exportXlsx() {
 /* ---------------- Init ---------------- */
 function saveKeys() {
   try {
-    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value, ts: $('taostatsKey').value}));
+    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value, ts: $('taostatsKey').value, su: $('subscanKey').value}));
     else localStorage.removeItem('evmcls_keys');
   } catch {}
 }
 (function init() {
   const groups = [...new Set(ALL_CHAINS.map(c => c.group))];
-  $('chainList').innerHTML = groups.map((g, gi) => `<div class="group">${g} <a data-g="${gi}" data-v="1">all</a><a data-g="${gi}" data-v="0">none</a></div><div class="chains">` +
-    ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}${c.moralis && c.src !== 'moralis' ? ' · Moralis when key entered' : ''}</small></span></label>`).join('') + '</div>').join('');
-  $('chainList').querySelectorAll('a[data-g]').forEach(a => a.onclick = () => $('chainList').querySelectorAll(`input[data-g="${a.dataset.g}"]`).forEach(cb => cb.checked = a.dataset.v === '1'));
+  $('chainList').innerHTML = groups.map((g, gi) => `<details class="pick" data-gi="${gi}"><summary><span>${g}</span><span class="pcount" id="pc_${gi}"></span><a data-g="${gi}" data-v="1">all</a><a data-g="${gi}" data-v="0">none</a></summary><div class="chains">` +
+    ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}${c.moralis && c.src !== 'moralis' ? ' · Moralis when key entered' : ''}</small></span></label>`).join('') + '</div></details>').join('');
   $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
-  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('remember').checked = true; } } catch {}
+  setupPicker();
+  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('subscanKey').value = k.su || ''; $('remember').checked = true; } } catch {}
   $('scan').onclick = scan;
   $('run').onclick = run;
   $('stop').onclick = () => { STOP = true; };
