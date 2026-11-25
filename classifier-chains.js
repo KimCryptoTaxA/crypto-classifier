@@ -135,6 +135,8 @@ async function detectAddress(s) {
   if (/^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,112}$/.test(s)) return {family: 'btc', addr: s, xpub: true, label: 'Bitcoin ' + s.slice(0, 4)};
   if (/^(addr1|stake1)[0-9a-z]{40,}$/.test(s)) return {family: 'ada', addr: s, label: 'Cardano'};
   if (/^B62q[1-9A-HJ-NP-Za-km-z]{51}$/.test(s)) return {family: 'mina', addr: s, label: 'Mina'};
+  if (/^S[PM][0-9A-HJKMNP-TV-Z]{37,40}$/.test(s)) return {family: 'stx', addr: s, label: 'Stacks'};
+  if (/^DAG[0-9][1-9A-HJ-NP-Za-km-z]{36}$/.test(s)) return {family: 'dag', addr: s, label: 'Constellation (DAG)'};
   if (/^kaspa:[qpr][a-z0-9]{55,70}$/.test(s.toLowerCase())) return {family: 'kas', addr: s.toLowerCase(), label: 'Kaspa'};
   if (/^[0-9a-f]{64}$/i.test(s) && icpAccountValid(s)) return {family: 'icp', addr: s.toLowerCase(), label: 'ICP account ID'};
   if (/^[a-z2-7]{5}(-[a-z2-7]{5}){1,12}(-[a-z2-7]{1,5})?$/.test(s)) { const id = await icpPrincipalToAccount(s); if (id) return {family: 'icp', addr: id, principal: s, label: 'ICP principal'}; }
@@ -166,6 +168,7 @@ function toWords(bytes) { let acc = 0, bits = 0; const out = []; for (const b of
 function chainAddr(chain, det) {
   if (chain.family === 'substrate') { if (det.family === 'substrate' && !chain.evmAccounts) return chain.ss58 == null ? det.addr : ss58Encode(chain.ss58, det.pub); if (det.family === 'evm' && chain.evmAccounts) return det.addr; return null; }
   if (chain.family === 'hbar' && det.family === 'evm') return det.addr; // Hedera accounts also have a 0x… EVM address
+  if (chain.family === 'vet' && det.family === 'evm') return det.addr; // VeChain uses the same 0x… addresses
   // Kava and Injective accounts share their bytes with the 0x… address of the same key
   if (chain.family === 'cosmos' && chain.evm && det.family === 'evm') return bech32Encode(chain.hrp, toWords(hexToBytes(det.addr.slice(2))));
   if (!det.family || chain.family !== det.family) return null;
@@ -466,6 +469,175 @@ async function fetchMina(chain, addr, opt) {
   return trimToCutoff(all.filter(b => b.ts && !isNaN(b.ts)), cutoff);
 }
 
+/* ---------- Stacks (Hiro API — free, no key) ---------- */
+const HIRO = 'https://api.hiro.so';
+async function hiroGet(path) { // Hiro allows a limited number of keyless calls a minute: wait and retry on 429
+  for (let i = 0; i < 8; i++) {
+    if (STOP) throw new Error('Stopped');
+    const r = await fetch(HIRO + path);
+    if (r.ok) return r.json();
+    if (r.status === 429 || r.status >= 500) { if (i === 1) log('   Stacks: Hiro asked to slow down — waiting…', 'w'); await sleep(r.status === 429 ? 10000 * (i + 1) : 2000 * (i + 1)); continue; }
+    throw new Error(`api.hiro.so: HTTP ${r.status}`);
+  }
+  throw new Error('api.hiro.so: too many retries');
+}
+const STX_TOK = {};
+const stxToken = id => { const c = id.split('::')[0]; return STX_TOK[c] || (STX_TOK[c] = hiroGet(`/metadata/v1/ft/${c}`).then(j => ({sym: j.symbol || c.split('.')[1], name: j.name || '', dec: +j.decimals || 0})).catch(() => ({sym: c.split('.')[1] || c, name: '', dec: 0, unknown: true}))); };
+const stxShort = c => String(c || '').includes('.') ? String(c).split('.')[1] : short(c);
+async function fetchStacks(chain, addr, opt) {
+  const map = new Map(); let cutoff = null, n = 0;
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await hiroGet(`/extended/v2/addresses/${addr}/transactions?limit=50&offset=${p * 50}`); const list = j.results || [];
+    for (const r of list) {
+      const t = r.tx, h = t.tx_id, b = bucket(map, h), me = t.sender_address === addr, cc = t.contract_call, tt = t.token_transfer;
+      b.ts = new Date(t.block_time_iso || (+t.block_time || +t.burn_block_time) * 1000); b.ok = t.tx_status === 'success'; b.initKnown = true;
+      b.url = `https://explorer.hiro.so/txid/${h}?chain=mainnet`; b.from = t.sender_address; if (me) b.fee = (+t.fee_rate || 0) / 1e6;
+      b.method = cc ? cc.function_name : t.tx_type;
+      if (cc) { b.to = cc.contract_id; b.toIsContract = true; b.desc = `${stxShort(cc.contract_id)} · ${cc.function_name}`; }
+      if (tt) { b.to = tt.recipient_address; b.toIsContract = b.to.includes('.'); }
+      if (!b.ok) continue;
+      // STX: the summary's net change, with the fee taken back out (the fee is its own column)
+      const stxNet = BigInt(r.stx_received || 0) - BigInt(r.stx_sent || 0) + (me ? BigInt(t.fee_rate || 0) : 0n);
+      const ev = r.events || {}, nTok = ['ft', 'nft'].reduce((s2, k) => s2 + Object.values(ev[k] || {}).reduce((a, x) => a + (+x || 0), 0), 0);
+      const nets = new Map(); let stxCp = tt ? (me ? tt.recipient_address : t.sender_address) : (cc ? cc.contract_id : '');
+      const nStx = Object.values(ev.stx || {}).reduce((a, x) => a + (+x || 0), 0), stxCps = new Set();
+      if (nTok > 0 || (cc && nStx > 0)) { // token / NFT movements, or STX moved by a contract: read this transaction's events for this address
+        for (let off = 0; off < (nTok > 0 ? 1000 : 50); off += 50) { // STX-only: one page is enough to find who it went to
+          const e = await hiroGet(`/extended/v2/addresses/${addr}/transactions/${h}/events?limit=50&offset=${off}`); const evs = e.results || [];
+          for (const x of evs) {
+            const d = x.data || {}; const inn = d.recipient === addr, out = d.sender === addr; if (inn === out) continue;
+            if (x.type === 'stx') { if (d.type === 'transfer') stxCps.add(inn ? d.sender : d.recipient); continue; }
+            if (x.type !== 'ft' && x.type !== 'nft') continue;
+            const k = x.type + '|' + d.asset_identifier, cur = nets.get(k) || {type: x.type, id: d.asset_identifier, net: 0n, cp: '', nft: d.value?.repr || ''};
+            const amt = x.type === 'nft' ? 1n : BigInt(d.amount || 0); cur.net += inn ? amt : -amt; cur.cp = inn ? (d.sender || 'mint') : (d.recipient || 'burn'); nets.set(k, cur);
+          }
+          if (off + 50 >= +e.total || !evs.length) break;
+        }
+      }
+      if (stxCps.size === 1) stxCp = [...stxCps][0]; else if (stxCps.size > 1) b.desc = (b.desc ? b.desc + ' · ' : '') + `STX moved with ${stxCps.size} addresses: ${[...stxCps].slice(0, 4).map(stxShort).join(', ')}${stxCps.size > 4 ? '…' : ''}`;
+      if (stxNet) b.legs.push(natLeg(chain, stxNet > 0n ? 'in' : 'out', units((stxNet < 0n ? -stxNet : stxNet).toString(), 6), stxCp));
+      for (const v of nets.values()) {
+        if (!v.net) continue; const dir = v.net > 0n ? 'in' : 'out', abs = (v.net < 0n ? -v.net : v.net).toString(), cname = v.id.split('::')[0];
+        if (v.type === 'nft') { b.legs.push({dir, amount: +abs, sym: v.id.split('::')[1] || stxShort(cname), name: stxShort(cname), token: cname, kind: 'nft', id: v.nft, cp: v.cp, spam: false}); continue; }
+        const m = await stxToken(v.id);
+        b.legs.push({dir, amount: units(abs, m.dec), sym: m.sym, name: m.name || m.sym, token: cname, kind: 'token', id: null, cp: v.cp, spam: false});
+      }
+      // Stacking: STX is locked in place (no transfer) — record the fee only
+      if (cc && /^SP000000000000000000002Q6VF78\.pox/.test(cc.contract_id) && !b.legs.length) b.noValue = {cat: /delegate|stack/i.test(cc.function_name) ? 'Staking (Stacking)' : 'Staking (PoX)', comment: `${cc.function_name} on the Stacking (PoX) contract — STX stays in your account (locked). BTC rewards are paid to your Bitcoin address. Fee only.`};
+    }
+    n += list.length;
+    if (!list.length || (p + 1) * 50 >= +j.total) break;
+    const ts = list[list.length - 1].tx.block_time_iso; if (opt.from && ts && new Date(ts) < opt.from) break;
+    if (p === opt.maxPages - 1 && ts) cutoff = new Date(ts);
+    if (p && p % 4 === 0) log(`   Stacks: ${n.toLocaleString()} of ${(+j.total).toLocaleString()} transactions…`);
+    await sleep(250);
+  }
+  return trimToCutoff([...map.values()].filter(b => b.ts && !isNaN(b.ts)), cutoff);
+}
+
+/* ---------- Constellation DAG (block explorer API — free, no key) ---------- */
+const DAG_BE = 'https://be-mainnet.constellationnetwork.io';
+async function fetchDag(chain, addr, opt) {
+  const map = new Map(); let next = '', cutoff = null;
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await getJSON(`${DAG_BE}/addresses/${addr}/transactions?limit=100${next ? '&next=' + encodeURIComponent(next) : ''}`); const list = j.data || [];
+    for (const t of list) {
+      const b = bucket(map, t.hash); b.ts = new Date(t.timestamp); b.ok = true; b.initKnown = true; b.toIsContract = false; b.method = 'transfer';
+      b.url = `https://dagexplorer.io/transactions/${t.hash}`; b.from = t.source; b.to = t.destination;
+      const amt = (+t.amount || 0) / 1e8;
+      if (t.source === addr) { b.fee = (+t.fee || 0) / 1e8; if (t.destination !== addr && amt) b.legs.push(natLeg(chain, 'out', amt, t.destination)); }
+      else if (t.destination === addr && amt) b.legs.push(natLeg(chain, 'in', amt, t.source));
+    }
+    next = j.meta?.next || '';
+    if (!list.length || !next) break;
+    const ts = Date.parse(list[list.length - 1].timestamp); if (opt.from && ts < +opt.from) break;
+    if (p === opt.maxPages - 1) cutoff = new Date(ts);
+    await sleep(200);
+  }
+  const out = trimToCutoff([...map.values()].filter(b => b.ts && !isNaN(b.ts)), cutoff);
+  // Node/validator rewards and balances carried over from the 2021 network upgrade arrive without transactions: say how much is unexplained
+  if (!cutoff && !opt.from && !opt.to) try {
+    const bal = (+(await getJSON(`${DAG_BE}/addresses/${addr}/balance`)).data?.balance || 0) / 1e8;
+    const net = out.reduce((t, b) => t + b.legs.reduce((u, l) => u + (l.dir === 'in' ? l.amount : -l.amount), 0) - (b.from === addr ? b.fee || 0 : 0), 0);
+    const gap = Math.round((bal - net) * 1e8) / 1e8;
+    if (Math.abs(gap) >= 0.0001) log(`   ⚠ DAG: the transactions explain ${fmtNum(net)} DAG but the balance is ${fmtNum(bal)} DAG — ${fmtNum(gap)} DAG arrived without a transaction (node/validator rewards, or a balance carried over from the 2021 network upgrade). These are not listed: check the wallet on dagexplorer.io and add them by hand if needed.`, 'w');
+    else log(`   DAG: transactions match the balance (${fmtNum(bal)} DAG).`);
+  } catch (e) {}
+  return out;
+}
+
+/* ---------- VeChain (official indexer + node — free, no key) ---------- */
+const VC_IDX = 'https://indexer.mainnet.vechain.org/api/v1', VC_NODE = 'https://mainnet.vechain.org', VTHO = '0x0000000000000000000000000000456e65726779';
+const VC_TOK = {[VTHO]: Promise.resolve({sym: 'VTHO', name: 'VeThor', dec: 18})};
+const vcStr = hex => { const h = String(hex || '').slice(2); if (!h) return ''; let b = h.length >= 192 ? h.slice(128, 128 + 2 * parseInt(h.slice(64, 128), 16)) : h.slice(0, 64); return (b.match(/../g) || []).map(x => parseInt(x, 16)).filter(c => c >= 32 && c < 127).map(c => String.fromCharCode(c)).join('').trim(); };
+const vcToken = c => VC_TOK[c] || (VC_TOK[c] = getJSON(`${VC_NODE}/accounts/*`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({clauses: [{to: c, value: '0x0', data: '0x95d89b41'}, {to: c, value: '0x0', data: '0x313ce567'}, {to: c, value: '0x0', data: '0x06fdde03'}]})})
+  .then(r => ({sym: vcStr(r[0]?.data) || short(c), dec: r[1]?.reverted || !r[1]?.data || r[1].data === '0x' ? 18 : parseInt(r[1].data, 16), name: vcStr(r[2]?.data) || ''})).catch(() => ({sym: short(c), name: '', dec: 18, unknown: true})));
+async function vcPages(path, opt, label, stopTs) {
+  const out = [];
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await getJSON(`${VC_IDX}${path}${path.includes('?') ? '&' : '?'}size=50&page=${p}`); const list = j.data || []; out.push(...list);
+    if (!list.length || !j.pagination?.hasNext) return {out, cut: null};
+    const ts = +list[list.length - 1].blockTimestamp * 1000; if (stopTs && ts < stopTs) return {out, cut: null};
+    if (p === opt.maxPages - 1) return {out, cut: new Date(ts)};
+    if (p && p % 10 === 0) log(`   VeChain: ${out.length.toLocaleString()} ${label} so far…`);
+    await sleep(150);
+  }
+  return {out, cut: null};
+}
+async function fetchVechain(chain, addr, opt) {
+  addr = addr.toLowerCase(); const map = new Map(); const me = a => String(a || '').toLowerCase() === addr;
+  const hist = await vcPages(`/history/${addr}`, opt, 'events', opt.from ? +opt.from : 0);
+  const sent = await vcPages(`/transactions?origin=${addr}`, opt, 'sent transactions', opt.from ? +opt.from : 0);
+  const cutoff = [hist.cut, sent.cut].filter(Boolean).sort((a, b) => b - a)[0] || null;
+  const init = (h, ts) => { const b = bucket(map, h); b.ts = new Date(ts * 1000); b.initKnown = true; b.toIsContract = false; b.url = `https://vechainstats.com/transaction/${h}/`; if (b.ok == null) b.ok = true; return b; };
+  for (const t of sent.out) { // fees: VTHO paid by this address (none when a dApp sponsored the fee)
+    const b = init(t.id, +t.blockTimestamp); b.from = addr; b.ok = !t.reverted; b.method = b.method || 'transaction';
+    if (me(t.gasPayer)) { b.fee = Number(BigInt(t.paid || '0x0')) / 1e18; b.feeCur = 'VTHO'; } else if (t.gasPayer) b.desc = `fee paid by ${short(t.gasPayer)} (sponsored)`;
+  }
+  for (const e of hist.out) {
+    const b = init(e.txId, +e.blockTimestamp); if (me(e.origin)) b.from = addr; else if (!b.from) b.from = e.origin;
+    const ev = e.eventName || ''; b.method = b.method && b.method !== 'transaction' ? b.method : ev.toLowerCase().replace(/_/g, ' ');
+    if (e.inputToken && e.outputToken) { (b._vcSwaps = b._vcSwaps || []).push(e); continue; } // swap events (VTHO→B3TR, B3TR↔VOT3 …): handled below
+    if (!/^TRANSFER_/.test(ev)) continue; const inn = me(e.to), out = me(e.from); if (inn === out) continue;
+    const dir = inn ? 'in' : 'out', cp = inn ? e.from : e.to; if (out && e.to) { b.to = e.to; }
+    if (ev === 'TRANSFER_VET') { const v = units(String(e.value || 0), 18); if (v) b.legs.push(natLeg(chain, dir, v, cp)); continue; }
+    const c = String(e.contractAddress || '').toLowerCase();
+    if (ev === 'TRANSFER_NFT') { const m = await vcToken(c); b.legs.push({dir, amount: 1, sym: m.sym, name: m.name || m.sym, token: c, kind: 'nft', id: e.tokenId, cp, spam: false}); continue; }
+    if (ev === 'TRANSFER_FT') { const m = await vcToken(c); const v = units(String(e.value || 0), m.dec); if (v) b.legs.push({dir, amount: v, sym: m.sym, name: m.name || m.sym, token: c, kind: 'token', id: null, cp, spam: false}); }
+  }
+  // Fees this address paid for transactions sent by another address (fee delegation, e.g. a VeWorld smart account): read the receipt
+  const sentIds = new Set(sent.out.map(t => t.id)), sponsored = [...new Set(hist.out.filter(e => me(e.gasPayer) && !me(e.origin) && !sentIds.has(e.txId)).map(e => e.txId))];
+  for (const h of sponsored) {
+    try { const r = await getJSON(`${VC_NODE}/transactions/${h}/receipt`); const b = map.get(h); if (b && r && me(r.gasPayer)) { b.fee = Number(BigInt(r.paid || '0x0')) / 1e18; b.feeCur = 'VTHO'; b.from = addr; b.ok = !r.reverted; b.desc = (b.desc ? b.desc + ' · ' : '') + 'fee paid by this wallet for a transaction sent by ' + short(r.meta?.txOrigin || ''); } } catch (e) {}
+    await sleep(60);
+  }
+  // The indexer reports some swaps only as a swap event (no separate transfer): add the token movements it did not already list
+  const vcLeg = async (tok, val, dir, cp) => { tok = String(tok).toLowerCase(); if (/^0x0{40}$/.test(tok)) return natLeg(chain, dir, units(String(val || 0), 18), cp); const m = await vcToken(tok); return {dir, amount: units(String(val || 0), m.dec), sym: m.sym, name: m.name || m.sym, token: tok, kind: 'token', id: null, cp, spam: false}; };
+  for (const b of map.values()) {
+    const sw = b._vcSwaps; delete b._vcSwaps; if (!sw || !b.ok) continue;
+    for (const e of sw) {
+      const mine = me(e.origin), want = [];
+      if (mine || me(e.from)) want.push(['out', e.inputToken, e.inputValue, e.to]);
+      if (mine || me(e.to)) want.push(['in', e.outputToken, e.outputValue, e.to]);
+      for (const [dir, tok, val, cp] of want) {
+        const t = String(tok).toLowerCase(); if (b.legs.some(l => l.dir === dir && (l.token === t || (/^0x0{40}$/.test(t) && l.kind === 'native')))) continue;
+        const l = await vcLeg(tok, val, dir, cp || ''); if (l.amount) b.legs.push(l);
+      }
+      b.method = String(e.eventName || 'swap').toLowerCase().replace(/_/g, ' ');
+    }
+  }
+  const all = trimToCutoff([...map.values()].filter(b => b.ts && !isNaN(b.ts)), cutoff);
+  // Holding VET generates VTHO with no transaction: report how much VTHO the transactions do not explain
+  if (!cutoff && !opt.from && !opt.to) try {
+    const acc = await getJSON(`${VC_NODE}/accounts/${addr}`), sum = (sym) => all.reduce((t, b) => t + b.legs.filter(l => l.sym === sym && (sym === 'VET' ? l.kind === 'native' : l.token === VTHO)).reduce((u, l) => u + (l.dir === 'in' ? l.amount : -l.amount), 0) - (sym === 'VTHO' && b.from === addr && b.feeCur === 'VTHO' ? b.fee || 0 : 0), 0);
+    const vet = Number(BigInt(acc.balance || '0x0')) / 1e18, vtho = Number(BigInt(acc.energy || '0x0')) / 1e18, nv = sum('VET'), nt = sum('VTHO');
+    if (Math.abs(vet - nv) >= 0.0001) log(`   ⚠ VeChain: transactions explain ${fmtNum(nv)} VET but the balance is ${fmtNum(vet)} VET — please check on vechainstats.com.`, 'w');
+    const gap = vtho - nt; if (Math.abs(gap) >= 0.0001) log(`   ℹ VeChain: ${fmtNum(gap)} VTHO is not explained by transactions — VTHO generated by holding VET (no transaction is created for it)${gap < 0 ? '; negative means fees of transactions the indexer does not list' : ''}. Not added as rows.`, gap < 0 ? 'w' : '');
+    else log(`   VeChain: VET and VTHO match the balances (${fmtNum(vet)} VET, ${fmtNum(vtho)} VTHO).`);
+  } catch (e) {}
+  return all;
+}
+
 /* ---------- Internet Computer (ICP ledger API — free, no key) ---------- */
 // A principal (xxxxx-xxxxx-…) becomes its main ledger account: crc32 ‖ sha224("\x0Aaccount-id" ‖ principal ‖ 32 zero bytes).
 const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -735,17 +907,29 @@ function cosmosHint(types, msgs) {
   }
   return /MsgSend|MsgMultiSend/.test(t) ? 'transfer' : '';
 }
+// Free REST nodes keep different amounts of history (some only recent blocks) and cosmos.directory rotates between them,
+// so ask several in parallel and page through the one that knows the most transactions for this address.
+const cosmosRests = c => { const n = c.dir === 'cosmoshub' ? 'cosmos' : c.dir; return [`https://rest.cosmos.directory/${c.dir}`, `https://${n}-rest.publicnode.com`, `https://${n}-api.polkachu.com`]; };
 async function fetchCosmos(chain, addr, opt) {
-  const base = `https://rest.cosmos.directory/${chain.dir}/cosmos/tx/v1beta1/txs`, seen = new Map();
-  let legacy = false, cutoff = null;
+  const seen = new Map(); let cutoff = null;
+  const url = (base, q, page, legacy) => legacy ? `${base}/cosmos/tx/v1beta1/txs?events=${encodeURIComponent(q)}&pagination.limit=50&pagination.offset=${(page - 1) * 50}&order_by=ORDER_BY_DESC`
+                                                : `${base}/cosmos/tx/v1beta1/txs?query=${encodeURIComponent(q)}&page=${page}&limit=50&order_by=ORDER_BY_DESC`;
   for (const q of [`message.sender='${addr}'`, `transfer.recipient='${addr}'`]) {
+    // page 1 from every node at once; keep the node reporting the most transactions
+    let best = null;
+    for (const legacy of [false, true]) {
+      const tries = await Promise.allSettled(cosmosRests(chain).map(base => getJSON(url(base, q, 1, legacy), {}, 3).then(j => ({base, j, n: Math.max(+j.total || +j.pagination?.total || 0, (j.tx_responses || []).length)}))));
+      for (const t of tries) if (t.status === 'fulfilled' && (!best || t.value.n > best.n)) best = {...t.value, legacy};
+      if (best) break;
+    }
+    if (!best) { log(`   ⚠ ${chain.name}: no node answered the "${q.split('=')[0]}" search — some transactions may be missing.`, 'w'); continue; }
+    let list = best.j.tx_responses || [];
     for (let page = 1; page <= opt.maxPages; page++) {
-      const url = legacy ? `${base}?events=${encodeURIComponent(q)}&pagination.limit=50&pagination.offset=${(page - 1) * 50}&order_by=ORDER_BY_DESC`
-                         : `${base}?query=${encodeURIComponent(q)}&page=${page}&limit=50&order_by=ORDER_BY_DESC`;
-      let j;
-      try { j = await getJSON(url); }
-      catch (e) { if (!legacy && page === 1 && /HTTP 4|HTTP 5|Too many/.test(e.message)) { legacy = true; page--; continue; } throw e; }
-      const list = j.tx_responses || []; list.forEach(r => seen.set(r.txhash, r));
+      if (page > 1) {
+        try { list = (await getJSON(url(best.base, q, page, best.legacy))).tx_responses || []; }
+        catch (e) { log(`   ⚠ ${chain.name}: stopped at page ${page} (${String(e.message).slice(0, 50)}) — older transactions may be missing.`, 'w'); break; }
+      }
+      list.forEach(r => seen.set(r.txhash, r));
       if (list.length < 50) break;
       const ts = new Date(list[list.length - 1].timestamp);
       if (opt.from && ts < opt.from) break;
@@ -753,6 +937,10 @@ async function fetchCosmos(chain, addr, opt) {
       await sleep(250);
     }
   }
+  if (seen.size && !cutoff) { // free nodes prune old blocks (Cosmos Hub keeps months, Osmosis about a week, Celestia about a day)
+    const oldest = new Date(Math.min(...[...seen.values()].map(r => +new Date(r.timestamp))));
+    log(`   ℹ ${chain.name}: oldest transaction the free nodes still have is ${oldest.toISOString().slice(0, 10)}. Public nodes delete old history, so anything before that is NOT included — check the wallet on mintscan.io.`, 'w');
+  } else if (!seen.size) log(`   ℹ ${chain.name}: no transactions found. Public nodes delete old history (Osmosis/Celestia keep only days), so older activity may exist — check the wallet on mintscan.io.`, 'w');
   const map = new Map();
   for (const r of seen.values()) {
     const b = bucket(map, r.txhash); b.ts = new Date(r.timestamp); b.ok = r.code === 0; b.initKnown = true;
@@ -1999,6 +2187,18 @@ const NONEVM_CHAINS = [
     txUrl: h => 'https://dashboard.internetcomputer.org/transaction/' + h,
     scan: async a => { try { const j = await getJSON(`${ICP_API}/accounts/${a}`); const n = +j.transaction_count || 0; return {active: n > 0, count: n}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; } },
     fetch: (a, o) => fetchIcp(NONEVM_BY_ID.icp, a, o)},
+  {id: 'vet', name: 'VeChain', code: 'VET', native: 'VET', family: 'vet', group: 'Other chains', def: true, label: 'VeChain indexer · free, no key (0x… address)',
+    txUrl: h => `https://vechainstats.com/transaction/${h}/`,
+    scan: async a => { const j = await getJSON(`${VC_IDX}/history/${a.toLowerCase()}?size=50&page=0`); const n = (j.data || []).length; return {active: n > 0, count: n ? (j.pagination?.hasNext ? '50+' : n) : 0}; },
+    fetch: (a, o) => fetchVechain(NONEVM_BY_ID.vet, a, o)},
+  {id: 'stx', name: 'Stacks', code: 'STX', native: 'STX', family: 'stx', group: 'Bitcoin & co.', def: true, label: 'Hiro API · free, no key',
+    txUrl: h => `https://explorer.hiro.so/txid/${h}?chain=mainnet`,
+    scan: async a => { const j = await hiroGet(`/extended/v2/addresses/${a}/transactions?limit=1`); return {active: +j.total > 0, count: +j.total || 0}; },
+    fetch: (a, o) => fetchStacks(NONEVM_BY_ID.stx, a, o)},
+  {id: 'dag', name: 'Constellation', code: 'DAG', native: 'DAG', family: 'dag', group: 'Other chains', def: true, label: 'Constellation block explorer · free, no key',
+    txUrl: h => 'https://dagexplorer.io/transactions/' + h,
+    scan: async a => { const j = await getJSON(`${DAG_BE}/addresses/${a}/transactions?limit=1`); const n = (j.data || []).length; return {active: n > 0, count: n ? (j.meta?.next ? '✓' : 1) : 0}; },
+    fetch: (a, o) => fetchDag(NONEVM_BY_ID.dag, a, o)},
   {id: 'kas', name: 'Kaspa', code: 'KAS', native: 'KAS', family: 'kas', group: 'Bitcoin & co.', def: true, label: 'api.kaspa.org · free, no key',
     txUrl: h => 'https://explorer.kaspa.org/txs/' + h,
     scan: async a => { const j = await getJSON(`${KASPA}/addresses/${a}/transactions-count`); return {active: +j.total > 0, count: +j.total || 0}; },
@@ -2016,7 +2216,7 @@ const NONEVM_CHAINS = [
     fetch: (a, o) => fetchTron(NONEVM_BY_ID.trx, a, o)},
   ...COSMOS.map(c => ({...c, native: c.sym || c.code, family: 'cosmos', group: 'Cosmos', def: true, label: c.evm ? 'cosmos.directory · free (also checks your 0x addresses; native coin only)' : 'cosmos.directory · free',
     txUrl: h => `https://www.mintscan.io/${c.ms}/tx/${h}`,
-    scan: async a => { try { await getJSON(`https://rest.cosmos.directory/${c.dir}/cosmos/auth/v1beta1/accounts/${a}`); return {active: true, count: '✓'}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; } },
+    scan: async a => { let err; for (const base of cosmosRests(c)) { try { await getJSON(`${base}/cosmos/auth/v1beta1/accounts/${a}`, {}, 2); return {active: true, count: '✓'}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; err = e; } } throw err; },
     fetch: (a, o) => fetchCosmos(NONEVM_BY_ID[c.id], a, o)})),
   {id: 'ton', name: 'TON', code: 'TON', native: 'TON', family: 'ton', group: 'Other chains', def: true, label: 'tonapi.io · free (slow: 1 call/sec)',
     txUrl: h => 'https://tonviewer.com/transaction/' + h,
