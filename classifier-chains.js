@@ -393,7 +393,8 @@ async function fetchXpubForm(chain, x, opt, me = x) {
 }
 /* ---------- Mina Protocol (Blockberry API — the data behind Minascan; free API key) ---------- */
 const BLOCKBERRY_MINA = 'https://api.blockberry.one/mina-mainnet/v1';
-const minaGet = (path, key) => getJSON(`${BLOCKBERRY_MINA}${path}`, {headers: {'x-api-key': key, accept: 'application/json'}});
+// Blockberry sends a doubled CORS header ("*, *"), so browsers reject direct calls: go through the local helper / web app.
+const minaGet = (path, key) => getJSON(proxied(`${BLOCKBERRY_MINA}${path}`), {headers: {'X-Api-Key': key, accept: 'application/json'}});
 const minaAmt = v => { if (v == null || v === '') return 0; const s = String(v); return /^\d{10,}$/.test(s) ? units(s, 9) : +s; }; // nanomina or MINA
 async function fetchMina(chain, addr, opt) {
   const key = opt.blockberryKey; if (!key) throw new Error('paste a free Blockberry API key (api.blockberry.one) to use Mina');
@@ -405,7 +406,7 @@ async function fetchMina(chain, addr, opt) {
       const b = bucket(map, h); const ts = +t.age || Date.parse(t.timestamp || t.dateTime || '') || 0; b.ts = new Date(ts > 1e12 ? ts : ts * 1000);
       b.ok = !/fail/i.test(t.status || ''); b.initKnown = true; b.url = `https://minascan.io/mainnet/tx/${h}`;
       const from = t.senderAddress || t.from || '', to = t.receiverAddress || t.to || '', type = String(t.type || 'payment').toLowerCase(), amt = minaAmt(t.amount);
-      b.method = type; if (t.memo) b.desc = 'memo: ' + String(t.memo).slice(0, 40);
+      b.method = type; b.toIsContract = false; if (t.memo) b.desc = 'memo: ' + String(t.memo).slice(0, 40);
       if (from === addr) { b.from = addr; b.fee = minaAmt(t.fee); } else if (!b.from) b.from = from;
       if (/delegat/.test(type)) { if (from === addr) b.noValue = {cat: 'Staking (Delegate)', comment: `Delegated this account's MINA to ${short(to)} (coins stay in your account). Fee only.`}; continue; }
       if (/coinbase|fee_transfer|fee transfer/.test(type) && to === addr) {
@@ -413,14 +414,56 @@ async function fetchMina(chain, addr, opt) {
       }
       if (!b.ok || !amt) continue;
       if (from === addr && to !== addr) { b.legs.push(natLeg(chain, 'out', amt, to)); b.to = to; }
-      else if (to === addr && from !== addr) b.legs.push(natLeg(chain, 'in', amt, from));
+      else if (to === addr && from !== addr) {
+        b.legs.push(natLeg(chain, 'in', amt, from)); b._minaIn = {from, amt, memo: String(t.memo || '')};
+        if (amt < 0.01 && /airdrop|claim|bonus|giveaway|\.(com|org|info|io|net)|,com/i.test(t.memo || '')) b.flags.push(`fake MINA "airdrop" dust with a website in the memo ("${String(t.memo).slice(0, 40)}") — phishing bait, do not visit`);
+      }
     }
     if (!list.length || j.last === true || (j.totalPages != null && p + 1 >= +j.totalPages)) break;
     const last = list[list.length - 1], ts = +last.age || 0; if (opt.from && ts && (ts > 1e12 ? ts : ts * 1000) < +opt.from) break;
     if (p === opt.maxPages - 1 && ts) cutoff = new Date(ts > 1e12 ? ts : ts * 1000);
     await sleep(300);
   }
-  return trimToCutoff([...map.values()].filter(b => b.ts && !isNaN(b.ts)), cutoff);
+  // Mina staking rewards are paid by the pool as ordinary payments. Treat as rewards: a memo that says so,
+  // or a sender who paid this account 3+ times after it delegated (typical per-epoch pool payouts) — marked review.
+  // zkApp transactions (e.g. Auro Wallet's batch staking payouts since Dec 2024) are listed separately; their amounts are per-account balance changes in the detail.
+  const MINA_TOKEN = 'wSHV2S4qX9jFsLjQo8r1BsMLH2ZRKsZx6EJd1sbozGPieEC4Jf';
+  for (let p = 0; p < opt.maxPages; p++) {
+    let j; try { j = await minaGet(`/zkapps/accounts/${addr}/txs?page=${p}&size=50&orderBy=DESC&sortBy=AGE`, key); } catch (e) { log(`   Mina zkApp transactions unavailable (${String(e.message).slice(0, 60)}) — payment rows only.`, 'w'); break; }
+    const list = j.data || j.content || []; let older = false;
+    for (const z of list) {
+      const h = z.hash || z.txHash; if (!h || map.has(h)) continue;
+      if (opt.from && +z.age < +opt.from) { older = true; continue; }
+      let d; try { d = await minaGet(`/zkapps/txs/${h}`, key); } catch (e) { log(`   could not read zkApp tx ${short(h)}: ${String(e.message).slice(0, 50)}`, 'w'); continue; }
+      const mine = (d.updatedAccounts || []).filter(u => u.accountAddress === addr && (!u.tokenId || u.tokenId === MINA_TOKEN));
+      const change = mine.reduce((t, u) => t + (+u.totalBalanceChange || 0), 0), payer = d.feePayerAddress === addr;
+      const b = bucket(map, h); b.ts = new Date(+d.timestamp || +z.age); b.ok = !/fail/i.test(d.txStatus || z.status || ''); b.initKnown = true; b.toIsContract = false;
+      b.url = `https://minascan.io/mainnet/tx/${h}`; b.method = 'zkApp'; const memo = String(d.memo || z.memo || ''); if (memo) b.desc = 'memo: ' + memo.slice(0, 40);
+      b.from = payer ? addr : (d.feePayerAddress || ''); if (payer) b.fee = +d.fee || 0;
+      if (!b.ok) continue;
+      // the fee payer's own update already includes the fee: take it out so it is not counted twice
+      const amt = Math.round(Math.abs(change + (payer ? +d.fee || 0 : 0)) * 1e9) / 1e9; if (!amt) continue;
+      if (change > 0) { b.legs.push(natLeg(chain, 'in', amt, d.feePayerAddress || '')); b._minaIn = {from: d.feePayerAddress || '', amt, memo}; }
+      else { b.legs.push(natLeg(chain, 'out', amt, '')); }
+      await sleep(120);
+    }
+    if (older || !list.length || j.last === true || (j.totalPages != null && p + 1 >= +j.totalPages)) break;
+  }
+  // Mina charges 1 MINA to create a new account, taken from the first amount it receives.
+  const firstIn = [...map.values()].filter(b => b.legs.some(l => l.dir === 'in')).sort((a, b2) => a.ts - b2.ts)[0];
+  if (firstIn && !cutoff && !opt.from) { firstIn.fee = 1; firstIn.desc = ((firstIn.desc ? firstIn.desc + ' · ' : '') + 'includes the 1 MINA account-creation fee Mina charges on an account\'s first receipt'); }
+  const all = [...map.values()], delegTs = all.filter(b => b.noValue && /Delegate/.test(b.noValue.cat)).map(b => +b.ts);
+  const firstDeleg = delegTs.length ? Math.min(...delegTs) : null, payers = {};
+  for (const b of all) if (b._minaIn && firstDeleg != null && +b.ts >= firstDeleg) payers[b._minaIn.from] = (payers[b._minaIn.from] || 0) + 1;
+  for (const b of all) {
+    const m = b._minaIn; delete b._minaIn; if (!m) continue;
+    if (b.flags.length) continue; // e.g. fake 'reward' dust with a website in the memo
+    const byMemo = /reward|payout|epoch|staking|delegat/i.test(m.memo), byPattern = (payers[m.from] || 0) >= 3;
+    if (!byMemo && !byPattern) continue;
+    b.legs = []; b.preRows = [{type: 'Staking', cat: byMemo ? 'Staking Rewards' : 'Staking Rewards (pool payout — review)', buy: natLeg(chain, 'in', m.amt, m.from), sell: null, lp: '',
+      comment: byMemo ? `Staking reward paid by ${short(m.from)}${m.memo ? ` (memo: ${m.memo.slice(0, 40)})` : ''}.` : `${short(m.from)} paid this account ${payers[m.from]} times after it delegated — looks like staking-pool payouts. Please review.`}];
+  }
+  return trimToCutoff(all.filter(b => b.ts && !isNaN(b.ts)), cutoff);
 }
 
 /* ---------- Internet Computer (ICP ledger API — free, no key) ---------- */
@@ -1947,9 +1990,9 @@ const NONEVM_CHAINS = [
       if (!/^[xyz]pub/.test(a)) return fetchEsplora(NONEVM_BY_ID.btc, 'https://mempool.space/api', a, o);
       if (HELPER) { try { return await fetchXpub(NONEVM_BY_ID.btc, a, o); } catch (e) { log(`   Trezor Blockbook unavailable (${e.message.slice(0, 60)}) — working out the addresses in the browser instead.`, 'w'); } }
       return fetchXpubLocal(NONEVM_BY_ID.btc, a, o); }},
-  {id: 'mina', name: 'Mina Protocol', code: 'MINA', native: 'MINA', family: 'mina', group: 'Other chains', def: true, label: 'Blockberry (Minascan) · free key',
+  {id: 'mina', name: 'Mina Protocol', code: 'MINA', native: 'MINA', family: 'mina', group: 'Other chains', def: true, label: 'Blockberry (Minascan) · free key · needs the local helper',
     txUrl: h => 'https://minascan.io/mainnet/tx/' + h,
-    scan: async (a, o) => { if (!o.blockberryKey) return {status: 'needs key', note: 'Blockberry key'};
+    scan: async (a, o) => { if (!o.blockberryKey) return {status: 'needs key', note: 'Blockberry key'}; if (!HELPER) return {status: 'error', note: 'needs the local helper'};
       const j = await minaGet(`/accounts/${a}/txs?page=0&size=1&orderBy=DESC&sortBy=AGE&direction=ALL`, o.blockberryKey); const n = +j.totalElements || (j.content || []).length; return {active: n > 0, count: n}; },
     fetch: (a, o) => fetchMina(NONEVM_BY_ID.mina, a, o)},
   {id: 'icp', name: 'Internet Computer', code: 'ICP', native: 'ICP', family: 'icp', group: 'Other chains', def: true, label: 'ICP ledger API · free, no key (principal or account ID)',

@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Crypto Transaction Classifier</title>
-<script src="webapp-bridge.js?v=2"></script>
+<script src="webapp-bridge.js?v=3"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=58"></script>
+<script src="classifier-chains.js?v=62"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -94,7 +94,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <div>
       <h3>Steps</h3>
       <ol>
-        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains), <b>Blockberry</b> (Mina). Tick “Remember keys”. Never share your keys.</li>
+        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains), <b>Blockberry</b> (Mina — also needs the local helper). Tick “Remember keys”. Never share your keys.</li>
         <li><b>Paste wallet addresses</b> in section 1, one per line, any chains mixed. Optional: From/To dates (e.g. one tax year).</li>
         <li><b>Click ① Scan.</b> Each address shows its chains: ✓ active, — none, ⚠ error, 🔑 needs a key. Untick what you don't want.</li>
         <li><b>Click ② Fetch &amp; classify ticked.</b> Big wallets take a few minutes. If the log says “Page limit reached”, raise <i>Max pages per list</i> or run one date range at a time.</li>
@@ -168,7 +168,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <input type="password" id="taostatsKey" autocomplete="off">
     <label>Subscan API key <span class="hint">— free at support.subscan.io (“API key”); needed for the Substrate chains (Astar, Moonbeam, Bifrost, Centrifuge, Avail, Vara, Enjin, peaq…). Polkadot &amp; Kusama work without it.</span></label>
     <input type="password" id="subscanKey" autocomplete="off">
-    <label>Blockberry API key <span class="hint">— free at api.blockberry.one (the data behind Minascan); needed for Mina Protocol</span></label>
+    <label>Blockberry API key <span class="hint">— free at api.blockberry.one (the data behind Minascan); needed for Mina Protocol. Mina also needs the local helper (or the web app). Staking payouts are fetched one by one, so allow ~3 s each.</span></label>
     <input type="password" id="blockberryKey" autocomplete="off">
     <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
     <input type="password" id="heliusKey" autocomplete="off">

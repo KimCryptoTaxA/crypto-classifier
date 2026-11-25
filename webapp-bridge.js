@@ -81,6 +81,7 @@
         var h = new Headers(init.headers);
         if (h.get('Authorization')) headers.Authorization = h.get('Authorization');
         if (h.get('Content-Type')) headers['Content-Type'] = h.get('Content-Type');
+        if (h.get('X-Api-Key')) headers['X-Api-Key'] = h.get('X-Api-Key');
       }
       window.parent.postMessage({ cvd: 1, type: 'proxy', id: id, path: url, method: (init && init.method) || 'GET',
         body: init && typeof init.body === 'string' ? init.body : null, headers: headers }, parentOrigin);
