@@ -6,7 +6,7 @@
 <title>Crypto Transaction Classifier</title>
 <script src="webapp-bridge.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=52"></script>
+<script src="classifier-chains.js?v=58"></script>
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
 @media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
@@ -94,7 +94,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <div>
       <h3>Steps</h3>
       <ol>
-        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains). Tick “Remember keys”. Never share your keys.</li>
+        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains), <b>Blockberry</b> (Mina). Tick “Remember keys”. Never share your keys.</li>
         <li><b>Paste wallet addresses</b> in section 1, one per line, any chains mixed. Optional: From/To dates (e.g. one tax year).</li>
         <li><b>Click ① Scan.</b> Each address shows its chains: ✓ active, — none, ⚠ error, 🔑 needs a key. Untick what you don't want.</li>
         <li><b>Click ② Fetch &amp; classify ticked.</b> Big wallets take a few minutes. If the log says “Page limit reached”, raise <i>Max pages per list</i> or run one date range at a time.</li>
@@ -109,7 +109,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>Buy Amount &amp; Currency, Sell Amount &amp; Currency, Fee Amount &amp; Currency, Exchange/Wallet Name, Comments, Date (mm-dd-yyyy hh:mm:ss, UTC by default), Liquidity Pool Address, Transaction Hash</li>
         <li><b>Exchange/Wallet Name</b>: chain code + last 6 characters of the address, e.g. <code>ETH_518dda</code></li>
         <li>Plain-language Comments, Chain, Wallet Address and an Explorer Link for every row; plus Summary and Wallets sheets</li>
-        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR, Bittensor, THORChain, Polkadot, Kusama and 27 more Substrate chains</li>
+        <li>Chains: Ethereum and 30+ EVM chains, Bitcoin (address or xpub/zpub), Litecoin, Dogecoin, Solana, Tron, Cosmos chains, TON, XRP, Stellar, Hedera, Algorand, Filecoin, IOTA, Casper, Cardano, XPR, Bittensor, THORChain, Kaspa, ICP, Mina, Polkadot, Kusama and 27 more Substrate chains</li>
       </ul>
     </div>
     <div>
@@ -133,7 +133,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 <div class="grid">
   <section class="card">
     <h2>1. Wallets</h2>
-    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor / Substrate), 1… (Polkadot), C…/H… (Kusama), thor1… (THORChain). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
+    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor / Substrate), 1… (Polkadot), C…/H… (Kusama), thor1… (THORChain), kaspa:q… (Kaspa), ICP principal or account ID, B62q… (Mina). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
@@ -168,6 +168,8 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <input type="password" id="taostatsKey" autocomplete="off">
     <label>Subscan API key <span class="hint">— free at support.subscan.io (“API key”); needed for the Substrate chains (Astar, Moonbeam, Bifrost, Centrifuge, Avail, Vara, Enjin, peaq…). Polkadot &amp; Kusama work without it.</span></label>
     <input type="password" id="subscanKey" autocomplete="off">
+    <label>Blockberry API key <span class="hint">— free at api.blockberry.one (the data behind Minascan); needed for Mina Protocol</span></label>
+    <input type="password" id="blockberryKey" autocomplete="off">
     <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
     <input type="password" id="heliusKey" autocomplete="off">
     <div class="row">
@@ -600,6 +602,15 @@ function lookalikeOf(cp, contacts) {
 const longShort = a => { a = String(a || ''); return a.length > 20 ? a.slice(0, 10) + '…' + a.slice(-6) : a; };
 const STABLE_RX = /^(USDC|USDT|USD₮|USDT0|DAI|USDBC|USDC\.E|USDT\.E|FDUSD|PYUSD|TUSD|USDE|USDS|BUSD|USDP|GUSD|LUSD|FRAX|EURC)$/i;
 // Real contacts: addresses this wallet sent funds to (in transactions it signed) or received at least ~1 unit from.
+// ScamSniffer's free public list of scam / phishing / drainer addresses (GitHub; frozen since Feb 2024 — newer data is in their paid API).
+let SCAM_LIST = null;
+async function loadScamList() {
+  if (SCAM_LIST) return SCAM_LIST;
+  try { const j = await getJSON('https://raw.githubusercontent.com/scamsniffer/scam-database/main/blacklist/address.json', {}, 2);
+    SCAM_LIST = new Set((j.address || j || []).map(a => lc(a))); log(`   Scam list: ${SCAM_LIST.size.toLocaleString()} known scam addresses loaded (ScamSniffer free list, up to Feb 2024).`); }
+  catch (e) { SCAM_LIST = new Set(); }
+  return SCAM_LIST;
+}
 function walletContacts(txs, addr) {
   const real = new Set(), dust = new Set();
   for (const b of txs) for (const l of b.legs || []) {
@@ -644,8 +655,14 @@ function classify(b, ctx) {
   const legs = netLegs(b.legs);
   let ins = legs.filter(l => l.dir === 'in'), outs = legs.filter(l => l.dir === 'out');
   spamReason.ctx = ctx.contacts;
-  if (!init && !outs.length && ins.length && ctx.contacts && ins.every(l => STABLE_RX.test(l.sym) && l.amount > 0 && l.amount < 0.01 && !ctx.contacts.real.has(l.cp)))
-    b.possibleSpam = b.possibleSpam || `dust: ${legStr(ins[0])} (less than one cent) from an address you never dealt with — typical address-poisoning bait`;
+  if (!init && !outs.length && ins.length && ctx.contacts) {
+    const dust = ins.filter(l => STABLE_RX.test(l.sym) && l.amount > 0 && l.amount < 0.01 && !ctx.contacts.real.has(l.cp));
+    if (dust.length && ins.every(l => dust.includes(l) || (l.kind !== 'native' && l.priced !== true && !ctx.usedTokens.has(l.token)))) { // other legs, if any, are fake tokens
+      const tiny = dust.every(l => l.amount <= 0.0001), bot = dust.some(l => b.from && l.cp && lc(b.from) !== lc(l.cp));
+      if (tiny || bot) b.flags.unshift(`address poisoning — ${legStr(dust[0])} ${bot ? 'pushed to you by a bot contract through ' + longShort(dust[0].cp) : 'from ' + longShort(dust[0].cp) + ', an address you never dealt with'}. Worthless bait to plant a lookalike address in your history`);
+      else b.possibleSpam = b.possibleSpam || `dust: ${legStr(dust[0])} (less than one cent) from an address you never dealt with — typical address-poisoning bait`;
+    }
+  }
   const spam = spamReason(b, a, ins, outs, ctx.usedTokens);
   if (spam) {
     if (ins.length + outs.length > 3) {
@@ -784,6 +801,8 @@ function classify(b, ctx) {
       else if (l.toZero) add('Withdrawal', 'Burn', null, l, '', `Burned ${legStr(l)} (sent to ${short(l.cp)}). ${mtxt}.`);
       else if (!plain && b.toIsContract !== false && init) add('Withdrawal', 'DeFi - Contract Deposit', null, l, b.to, `Sent ${legStr(l)} into contract${proto}. ${mtxt}. Review: could be a deposit into a protocol.`);
       else if (ctx.ownAddrs?.has(l.cp)) add('Withdrawal', 'Transfer (Own Wallets)', null, l, '', `Sent ${legStr(l)} to your own wallet ${ctx.ownAddrs.get(l.cp)} (${short(l.cp)}). ${mtxt}.`);
+      else if (b.scamTo && lc(b.scamTo) === lc(l.cp))
+        add('Withdrawal', 'Transfer Out (to known scam address — review)', null, l, '', `WARNING – sent ${legStr(l)} to ${longShort(l.cp)}, which ${l.cpName && /phish|scam|exploit|drainer|hacker/i.test(l.cpName) ? `is labelled "${l.cpName}"` : 'ScamSniffer lists as a scam/phishing (drainer) address'}. Possibly a scam loss, not a normal transfer. ${mtxt}.`);
       else if (ctx.contacts?.dust.has(l.cp) && lookalikeOf(l.cp, [...ctx.contacts.real].filter(x => x !== l.cp)))
         add('Withdrawal', 'Transfer Out (possible poisoning loss — review)', null, l, '', `WARNING – sent ${legStr(l)} to ${longShort(l.cp)}, which earlier sent you dust and looks like your contact ${longShort(lookalikeOf(l.cp, [...ctx.contacts.real].filter(x => x !== l.cp)))}. If this was a mistake it is a scam loss, not a normal transfer. ${mtxt}.`);
       else add('Withdrawal', 'Transfer Out', null, l, '', `Sent ${legStr(l)} to ${short(l.cp)}${l.cpName ? ` (${l.cpName})` : ''}. ${mtxt}.`);
@@ -835,7 +854,7 @@ function selectedChains() {
 }
 function getOpt() {
   return {maxPages: Math.min(5000, Math.max(1, +$('maxPages').value || 500)), esKey: $('esKey').value.trim(), dbKey: $('dbKey').value.trim(), bs: bsKeyVal(),
-    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(), taostatsKey: $('taostatsKey').value.trim(), subscanKey: $('subscanKey').value.trim(),
+    heliusKey: $('heliusKey').value.trim(), openseaKey: $('openseaKey').value.trim(), zerionKey: $('zerionKey').value.trim(), csprKey: $('csprKey').value.trim(), moralisKey: $('moralisKey').value.trim(), taostatsKey: $('taostatsKey').value.trim(), subscanKey: $('subscanKey').value.trim(), blockberryKey: $('blockberryKey').value.trim(),
     from: $('dFrom').value ? new Date($('dFrom').value + 'T00:00:00Z') : null, to: $('dTo').value ? new Date($('dTo').value + 'T23:59:59Z') : null};
 }
 
@@ -989,6 +1008,11 @@ async function run() {
       catch (e) { if (e.message === 'Stopped') throw e; log(`   ${wname}: ${e.message}`, 'e'); WALLETS.push({chain: chain.name, wallet: wname, addr, rows: 0, note: 'Error: ' + e.message}); continue; }
       const txs = res.txs.filter(b => (!opt.from || b.ts >= opt.from) && (!opt.to || b.ts <= opt.to)).sort((x, y) => x.ts - y.ts);
       const usedTokens = new Set(); res.txs.forEach(b => { if (b.from === addr) b.legs.forEach(l => { if (l.dir === 'out') usedTokens.add(l.token); }); });
+      const scamList = await loadScamList();
+      if (scamList) for (const b of res.txs) for (const l of b.legs || []) if (l.cp && scamList.has(lc(l.cp))) {
+        if (l.dir === 'in') { l.spam = true; b.flags.push(`ScamSniffer lists ${longShort(l.cp)} as a scam/phishing address`); }
+        else b.scamTo = l.cp;
+      }
       const contacts = walletContacts(res.txs, addr);
       let count = 0;
       for (const b of txs) {
@@ -1173,7 +1197,7 @@ function exportXlsx() {
 /* ---------------- Init ---------------- */
 function saveKeys() {
   try {
-    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value, ts: $('taostatsKey').value, su: $('subscanKey').value}));
+    if ($('remember').checked) localStorage.setItem('evmcls_keys', JSON.stringify({es: $('esKey').value, db: $('dbKey').value, bs: $('bsKey').value, he: $('heliusKey').value, os: $('openseaKey').value, ze: $('zerionKey').value, cs: $('csprKey').value, mo: $('moralisKey').value, ts: $('taostatsKey').value, su: $('subscanKey').value, bb: $('blockberryKey').value}));
     else localStorage.removeItem('evmcls_keys');
   } catch {}
 }
@@ -1183,7 +1207,7 @@ function saveKeys() {
     ALL_CHAINS.filter(c => c.group === g).map(c => `<label><input type="checkbox" id="ch_${c.id}" data-g="${gi}" ${c.def ? 'checked' : ''}><span>${c.name} <b>(${c.code})</b><small>${c.label || SRC_LABEL[c.id === 'gno' ? 'gno' : c.src]}${c.moralis && c.src !== 'moralis' ? ' · Moralis when key entered' : ''}</small></span></label>`).join('') + '</div></details>').join('');
   $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
   setupPicker();
-  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('subscanKey').value = k.su || ''; $('remember').checked = true; } } catch {}
+  try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('subscanKey').value = k.su || ''; $('blockberryKey').value = k.bb || ''; $('remember').checked = true; } } catch {}
   $('scan').onclick = scan;
   $('run').onclick = run;
   $('stop').onclick = () => { STOP = true; };

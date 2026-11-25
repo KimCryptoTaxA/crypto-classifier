@@ -134,6 +134,10 @@ async function detectAddress(s) {
   if (/^@?[a-z1-5.]{1,12}$/.test(s) && !/\.$/.test(s)) return {family: 'xpr', addr: s.replace(/^@/, ''), label: 'XPR Network account'};
   if (/^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,112}$/.test(s)) return {family: 'btc', addr: s, xpub: true, label: 'Bitcoin ' + s.slice(0, 4)};
   if (/^(addr1|stake1)[0-9a-z]{40,}$/.test(s)) return {family: 'ada', addr: s, label: 'Cardano'};
+  if (/^B62q[1-9A-HJ-NP-Za-km-z]{51}$/.test(s)) return {family: 'mina', addr: s, label: 'Mina'};
+  if (/^kaspa:[qpr][a-z0-9]{55,70}$/.test(s.toLowerCase())) return {family: 'kas', addr: s.toLowerCase(), label: 'Kaspa'};
+  if (/^[0-9a-f]{64}$/i.test(s) && icpAccountValid(s)) return {family: 'icp', addr: s.toLowerCase(), label: 'ICP account ID'};
+  if (/^[a-z2-7]{5}(-[a-z2-7]{5}){1,12}(-[a-z2-7]{1,5})?$/.test(s)) { const id = await icpPrincipalToAccount(s); if (id) return {family: 'icp', addr: id, principal: s, label: 'ICP principal'}; }
   if (/^(EQ|UQ|Ef|Uf|kQ|0Q)[A-Za-z0-9_-]{46}$/.test(s) || /^-?[01]:[0-9a-fA-F]{64}$/.test(s)) return {family: 'ton', addr: s, label: 'TON'};
   const bech = bech32Decode(s);
   if (bech) {
@@ -386,6 +390,127 @@ async function fetchXpubForm(chain, x, opt, me = x) {
   const mark = io => { const a = io.addresses?.[0] || ''; if (io.isOwn) own.add(a); return {addr: a, value: (+io.value || 0) / 1e8}; };
   const txs = raw.filter(t => t.blockTime).map(t => ({hash: t.txid, ts: new Date(t.blockTime * 1000), fee: (+t.fees || 0) / 1e8, ins: t.vin.map(mark), outs: t.vout.map(mark)}));
   return trimToCutoff(utxoBuckets(chain, txs, own, me), cutoff);
+}
+/* ---------- Mina Protocol (Blockberry API — the data behind Minascan; free API key) ---------- */
+const BLOCKBERRY_MINA = 'https://api.blockberry.one/mina-mainnet/v1';
+const minaGet = (path, key) => getJSON(`${BLOCKBERRY_MINA}${path}`, {headers: {'x-api-key': key, accept: 'application/json'}});
+const minaAmt = v => { if (v == null || v === '') return 0; const s = String(v); return /^\d{10,}$/.test(s) ? units(s, 9) : +s; }; // nanomina or MINA
+async function fetchMina(chain, addr, opt) {
+  const key = opt.blockberryKey; if (!key) throw new Error('paste a free Blockberry API key (api.blockberry.one) to use Mina');
+  const map = new Map(); let cutoff = null;
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await minaGet(`/accounts/${addr}/txs?page=${p}&size=50&orderBy=DESC&sortBy=AGE&direction=ALL`, key); const list = j.content || j.data || [];
+    for (const t of list) {
+      const h = t.txHash || t.hash; if (!h) continue;
+      const b = bucket(map, h); const ts = +t.age || Date.parse(t.timestamp || t.dateTime || '') || 0; b.ts = new Date(ts > 1e12 ? ts : ts * 1000);
+      b.ok = !/fail/i.test(t.status || ''); b.initKnown = true; b.url = `https://minascan.io/mainnet/tx/${h}`;
+      const from = t.senderAddress || t.from || '', to = t.receiverAddress || t.to || '', type = String(t.type || 'payment').toLowerCase(), amt = minaAmt(t.amount);
+      b.method = type; if (t.memo) b.desc = 'memo: ' + String(t.memo).slice(0, 40);
+      if (from === addr) { b.from = addr; b.fee = minaAmt(t.fee); } else if (!b.from) b.from = from;
+      if (/delegat/.test(type)) { if (from === addr) b.noValue = {cat: 'Staking (Delegate)', comment: `Delegated this account's MINA to ${short(to)} (coins stay in your account). Fee only.`}; continue; }
+      if (/coinbase|fee_transfer|fee transfer/.test(type) && to === addr) {
+        b.preRows = [{type: 'Mining', cat: 'Block Reward (coinbase)', buy: natLeg(chain, 'in', amt, ''), sell: null, lp: '', comment: `Mina ${type.replace('_', ' ')} for producing a block — ${amt} MINA.`}]; continue;
+      }
+      if (!b.ok || !amt) continue;
+      if (from === addr && to !== addr) { b.legs.push(natLeg(chain, 'out', amt, to)); b.to = to; }
+      else if (to === addr && from !== addr) b.legs.push(natLeg(chain, 'in', amt, from));
+    }
+    if (!list.length || j.last === true || (j.totalPages != null && p + 1 >= +j.totalPages)) break;
+    const last = list[list.length - 1], ts = +last.age || 0; if (opt.from && ts && (ts > 1e12 ? ts : ts * 1000) < +opt.from) break;
+    if (p === opt.maxPages - 1 && ts) cutoff = new Date(ts > 1e12 ? ts : ts * 1000);
+    await sleep(300);
+  }
+  return trimToCutoff([...map.values()].filter(b => b.ts && !isNaN(b.ts)), cutoff);
+}
+
+/* ---------- Internet Computer (ICP ledger API — free, no key) ---------- */
+// A principal (xxxxx-xxxxx-…) becomes its main ledger account: crc32 ‖ sha224("\x0Aaccount-id" ‖ principal ‖ 32 zero bytes).
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = b => { let c = 0xFFFFFFFF; for (const x of b) c = CRC_T[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+function sha224(msg) {
+  const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  let H = [0xc1059ed8,0x367cd507,0x3070dd17,0xf70e5939,0xffc00b31,0x68581511,0x64f98fa7,0xbefa4fa4];
+  const len = msg.length, padLen = ((len + 9 + 63) >> 6) << 6, m = new Uint8Array(padLen); m.set(msg); m[len] = 0x80;
+  const bits = len * 8; for (let i = 0; i < 4; i++) m[padLen - 1 - i] = (bits >>> (8 * i)) & 255;
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n)), W = new Uint32Array(64);
+  for (let o = 0; o < padLen; o += 64) {
+    for (let i = 0; i < 16; i++) W[i] = (m[o + 4 * i] << 24) | (m[o + 4 * i + 1] << 16) | (m[o + 4 * i + 2] << 8) | m[o + 4 * i + 3];
+    for (let i = 16; i < 64; i++) { const s0 = rotr(W[i - 15], 7) ^ rotr(W[i - 15], 18) ^ (W[i - 15] >>> 3), s1 = rotr(W[i - 2], 17) ^ rotr(W[i - 2], 19) ^ (W[i - 2] >>> 10); W[i] = (W[i - 16] + s0 + W[i - 7] + s1) | 0; }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) { const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + W[i]) | 0, t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0; }
+    H = H.map((v, i) => (v + [a, b, c, d, e, f, g, h][i]) | 0);
+  }
+  const out = new Uint8Array(28); for (let i = 0; i < 7; i++) for (let k = 0; k < 4; k++) out[i * 4 + k] = (H[i] >>> (24 - 8 * k)) & 255; return out;
+}
+function icpAccountValid(hex) { const b = hexToBytes(hex.toLowerCase()); return b.length === 32 && crc32(b.slice(4)) === ((b[0] << 24 | b[1] << 16 | b[2] << 8 | b[3]) >>> 0); }
+async function icpPrincipalToAccount(text) {
+  const s = text.replace(/-/g, '').toUpperCase(), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = 0, val = 0; const out = [];
+  for (const ch of s) { const i = A.indexOf(ch); if (i < 0) return null; val = (val << 5) | i; bits += 5; if (bits >= 8) { bits -= 8; out.push((val >>> bits) & 255); } }
+  const all = new Uint8Array(out); if (all.length < 5) return null;
+  const raw = all.slice(4); if (crc32(raw) !== ((all[0] << 24 | all[1] << 16 | all[2] << 8 | all[3]) >>> 0)) return null;
+  const h = sha224(new Uint8Array([10, ...new TextEncoder().encode('account-id'), ...raw, ...new Uint8Array(32)]));
+  const c = crc32(h); return [c >>> 24, (c >>> 16) & 255, (c >>> 8) & 255, c & 255, ...h].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+const ICP_API = 'https://ledger-api.internetcomputer.org';
+async function fetchIcp(chain, acct, opt) {
+  const map = new Map(); let cutoff = null; const LIM = 100;
+  for (let p = 0; p < opt.maxPages; p++) {
+    const j = await getJSON(`${ICP_API}/accounts/${acct}/transactions?limit=${LIM}&offset=${p * LIM}`); const list = j.blocks || [];
+    for (const t of list) {
+      const b = bucket(map, t.transaction_hash || t.block_height); b.ts = new Date(+t.created_at * 1000); b.ok = true; b.initKnown = true;
+      const from = t.from_account_identifier || '', to = t.to_account_identifier || '', amt = units(String(t.amount || 0), 8), type = t.transfer_type;
+      b.method = type; b.url = `https://dashboard.internetcomputer.org/transaction/${t.transaction_hash}`;
+      if (from === acct) { b.from = acct; b.fee = units(String(t.fee || 0), 8); }
+      else if (!b.from) b.from = from || 'minting account';
+      if (type === 'approve') { if (from === acct) b.noValue = {cat: 'Approval', comment: 'Approved another account to spend ICP (ICRC-2 approve). Fee only.'}; continue; }
+      if (type === 'mint' && to === acct) {   // new ICP created for this account: NNS staking maturity being disbursed, or other minting
+        b.preRows = [{type: 'Staking', cat: 'Staking Rewards (NNS — review)', buy: natLeg(chain, 'in', amt, ''), sell: null, lp: '', comment: `${amt} ICP minted to this account — usually NNS neuron rewards (maturity) being disbursed. Please review.`}];
+        continue;
+      }
+      if (type === 'burn' && from === acct) { b.legs.push({...natLeg(chain, 'out', amt, ''), toZero: true}); b.to = ''; continue; }
+      if (from === acct && to !== acct) { b.legs.push(natLeg(chain, 'out', amt, to)); b.to = to; }
+      else if (to === acct && from !== acct) b.legs.push(natLeg(chain, 'in', amt, from));
+    }
+    if (list.length < LIM || (p + 1) * LIM >= +j.total) break;
+    const ts = +list[list.length - 1].created_at * 1000; if (opt.from && ts < +opt.from) break;
+    if (p === opt.maxPages - 1) cutoff = new Date(ts);
+    if (p && p % 10 === 0) log(`   ICP: ${((p + 1) * LIM).toLocaleString()} of ${(+j.total).toLocaleString()} transactions…`);
+    await sleep(200);
+  }
+  return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
+}
+
+/* ---------- Kaspa (api.kaspa.org — free, no key). UTXO model like Bitcoin; amounts in sompi (1e8). ---------- */
+const KASPA = 'https://api.kaspa.org';
+async function fetchKaspa(chain, addr, opt) {
+  // Cursor paging: each page says where the next (older) page starts in its "x-next-page-before" header.
+  const raw = []; let cutoff = null, before = opt.to ? +opt.to : 0;
+  for (let p = 0; p < opt.maxPages; p++) {
+    let r, k = 0;
+    while (true) { r = await fetch(`${KASPA}/addresses/${addr}/full-transactions-page?limit=500&before=${before}&resolve_previous_outpoints=light`); if (r.ok || ++k > 4 || (r.status !== 429 && r.status < 500)) break; await sleep(1500 * k); }
+    if (!r.ok) throw new Error(`api.kaspa.org: HTTP ${r.status}`);
+    const list = await r.json() || []; raw.push(...list);
+    const next = r.headers.get('x-next-page-before');
+    if (!list.length || !next) break;
+    const ts = Math.min(...list.map(t => +t.block_time || Infinity));
+    if (opt.from && ts < +opt.from) break;
+    if (p === opt.maxPages - 1) { cutoff = new Date(ts); break; }
+    before = next;
+    if (p && p % 5 === 0) log(`   Kaspa: ${raw.length.toLocaleString()} transactions so far…`);
+    await sleep(250);
+  }
+  const seen = new Set();
+  const txs = raw.filter(t => t.is_accepted !== false && !seen.has(t.transaction_id) && seen.add(t.transaction_id)).map(t => {
+    const ins = (t.inputs || []).map(i => ({addr: i.previous_outpoint_address || '', value: (+i.previous_outpoint_amount || 0) / 1e8}));
+    const outs = (t.outputs || []).map(o => ({addr: o.script_public_key_address || '', value: (+o.amount || 0) / 1e8}));
+    const fee = Math.max(0, ins.reduce((s2, i) => s2 + i.value, 0) - outs.reduce((s2, o) => s2 + o.value, 0));
+    return {hash: t.transaction_id, ts: new Date(+t.block_time), fee: ins.length ? +fee.toFixed(8) : 0, ins, outs};
+  });
+  const buckets = utxoBuckets(chain, txs, new Set([addr]), addr);
+  // Mining rewards arrive as coinbase transactions (no inputs)
+  for (const b of buckets) { const t = txs.find(x => x.hash === b.hash); if (t && !t.ins.length && b.legs.length) { b.method = 'mining reward'; b.preRows = [{type: 'Mining', cat: 'Mining Reward', buy: b.legs[0], sell: null, lp: '', comment: `Kaspa block reward (coinbase) of ${b.legs[0].amount} KAS.`}]; b.legs = []; } }
+  return trimToCutoff(buckets, cutoff);
 }
 async function fetchDoge(chain, addr, opt) {
   const raw = []; let before = null, cutoff = null;
@@ -1676,6 +1801,10 @@ async function fetchMoralis(chain, addr, opt) {
         spam: yes(x.possible_spam), fromZero: f === ZERO, toZero: to === ZERO || to === DEAD});
     }
     if (!b.legs.length && b.from === a && /approve/.test(b.method)) b.noValue = {cat: 'Approval', comment: `Token approval/revoke${b.toName ? ' on ' + b.toName : ''}. Gas fee only.`};
+    // Moralis address labels such as "Fake_Phishing1234", "Scam", "Exploiter"
+    for (const l of b.legs) if (/phish|scam|exploit|drainer|hacker/i.test(l.cpName || '')) {
+      if (l.dir === 'in') { l.spam = true; b.flags.push(`Moralis labels ${l.cp.slice(0, 10)}… as "${l.cpName}"`); } else b.scamTo = l.cp;
+    }
   }
   return trimToCutoff([...map.values()], cutoff);
 }
@@ -1818,6 +1947,19 @@ const NONEVM_CHAINS = [
       if (!/^[xyz]pub/.test(a)) return fetchEsplora(NONEVM_BY_ID.btc, 'https://mempool.space/api', a, o);
       if (HELPER) { try { return await fetchXpub(NONEVM_BY_ID.btc, a, o); } catch (e) { log(`   Trezor Blockbook unavailable (${e.message.slice(0, 60)}) — working out the addresses in the browser instead.`, 'w'); } }
       return fetchXpubLocal(NONEVM_BY_ID.btc, a, o); }},
+  {id: 'mina', name: 'Mina Protocol', code: 'MINA', native: 'MINA', family: 'mina', group: 'Other chains', def: true, label: 'Blockberry (Minascan) · free key',
+    txUrl: h => 'https://minascan.io/mainnet/tx/' + h,
+    scan: async (a, o) => { if (!o.blockberryKey) return {status: 'needs key', note: 'Blockberry key'};
+      const j = await minaGet(`/accounts/${a}/txs?page=0&size=1&orderBy=DESC&sortBy=AGE&direction=ALL`, o.blockberryKey); const n = +j.totalElements || (j.content || []).length; return {active: n > 0, count: n}; },
+    fetch: (a, o) => fetchMina(NONEVM_BY_ID.mina, a, o)},
+  {id: 'icp', name: 'Internet Computer', code: 'ICP', native: 'ICP', family: 'icp', group: 'Other chains', def: true, label: 'ICP ledger API · free, no key (principal or account ID)',
+    txUrl: h => 'https://dashboard.internetcomputer.org/transaction/' + h,
+    scan: async a => { try { const j = await getJSON(`${ICP_API}/accounts/${a}`); const n = +j.transaction_count || 0; return {active: n > 0, count: n}; } catch (e) { if (notFound(e)) return {active: false, count: 0}; throw e; } },
+    fetch: (a, o) => fetchIcp(NONEVM_BY_ID.icp, a, o)},
+  {id: 'kas', name: 'Kaspa', code: 'KAS', native: 'KAS', family: 'kas', group: 'Bitcoin & co.', def: true, label: 'api.kaspa.org · free, no key',
+    txUrl: h => 'https://explorer.kaspa.org/txs/' + h,
+    scan: async a => { const j = await getJSON(`${KASPA}/addresses/${a}/transactions-count`); return {active: +j.total > 0, count: +j.total || 0}; },
+    fetch: (a, o) => fetchKaspa(NONEVM_BY_ID.kas, a, o)},
   {id: 'ltc', name: 'Litecoin', code: 'LTC', native: 'LTC', family: 'ltc', group: 'Bitcoin & co.', def: true, label: 'litecoinspace.org · free',
     txUrl: h => 'https://litecoinspace.org/tx/' + h,
     scan: a => scanEsplora('https://litecoinspace.org/api', a), fetch: (a, o) => fetchEsplora(NONEVM_BY_ID.ltc, 'https://litecoinspace.org/api', a, o)},
