@@ -83,7 +83,7 @@
     return close;
   }
   const SEARCH_COLS = ['Transaction Hash', 'Buy Currency', 'Sell Currency', 'Fee Currency', 'Type', 'Category', 'Exchange/Wallet Name', 'Comments', 'Chain', 'Wallet Address', 'Liquidity Pool Address', 'Date'];
-  const PAGE = 200;
+  const PAGE = 300;
   // exchange named in the category by the exchange-label lookup → {name, dir: 'to' | 'from'}
   const exchangeOf = r => {
     const c = String(r.Category || '');
@@ -97,9 +97,9 @@
   const kindOf = r => { if (/fee/i.test(r.Type)) return 'fee'; const b = amt(r['Buy Amount']), s = amt(r['Sell Amount']); return b && s ? 'tr' : b ? 'rx' : s ? 'tx' : /trade/i.test(r.Type) ? 'tr' : 'fee'; };
 
   const CSS = `
-.txv-back{position:fixed;inset:0;background:rgba(10,14,20,.55);z-index:1000;display:flex;align-items:stretch;justify-content:center;padding:24px}
+.txv-back{position:fixed;inset:0;background:rgba(10,14,20,.55);z-index:1000;display:flex;align-items:stretch;justify-content:center;padding:clamp(8px,2vh,24px) clamp(8px,1.5vw,24px)}
 .txv,.txv-pick{--bg:#f4f6fa;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d9dfe7;--acc:#2f5bd3;--accInk:#fff;--bad:#b42318;--chip:#eaeff6;--head:#f6f8fc;--thBg:#eef2f8;--hover:#f5f8ff;--rx:#15803d;--rxBg:#e3f4e9;--tx:#c0262d;--txBg:#fce8e8;--tr:#1f2a44;--trInk:#fff;--mark:#ffe58a;color-scheme:light}\n[data-theme="dark"] .txv,[data-theme="dark"] .txv-pick{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--bad:#ff7b72;--chip:#252a30;--head:#20242a;--thBg:#23282f;--hover:#232a35;--rx:#4ac08a;--rxBg:rgba(74,192,138,.16);--tx:#ff7b72;--txBg:rgba(255,123,114,.16);--tr:#a9bcff;--trInk:#0c0e10;--mark:#7a6420;color-scheme:dark}\n@media (prefers-color-scheme:dark){[data-theme="auto"] .txv,[data-theme="auto"] .txv-pick{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--bad:#ff7b72;--chip:#252a30;--head:#20242a;--thBg:#23282f;--hover:#232a35;--rx:#4ac08a;--rxBg:rgba(74,192,138,.16);--tx:#ff7b72;--txBg:rgba(255,123,114,.16);--tr:#a9bcff;--trInk:#0c0e10;--mark:#7a6420;color-scheme:dark}}
-.txv{background:var(--card,#fff);color:var(--ink,#1b1f24);border:1px solid var(--line,#dde1e6);border-radius:12px;width:100%;max-width:1400px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.txv{background:var(--card,#fff);color:var(--ink,#1b1f24);border:1px solid var(--line,#dde1e6);border-radius:12px;width:100%;max-width:2200px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 .txv-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line,#dde1e6);flex-wrap:wrap;background:var(--head)}
 .txv-head h2{margin:0;font-size:17px;flex:1;min-width:200px}
 .txv .themesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--card);padding:3px;gap:2px}
@@ -108,7 +108,14 @@
 .txv-body{overflow-x:hidden}
 .txv-wrap{max-width:100%}
 .txv-x{background:transparent;border:0;color:var(--mute,#5d6570);font-size:22px;cursor:pointer;padding:2px 8px;line-height:1}
-.txv-body{overflow:auto;padding:14px 18px 18px;flex:1}
+.txv-body{overflow:auto;padding:14px 18px 14px;flex:1;min-height:0;display:flex;flex-direction:column}
+.txv-body>*{flex:none}
+.txv-body>.txv-tbl{flex:1 1 0;min-height:clamp(260px,45vh,420px)}
+.txv-matwrap{max-height:min(28vh,330px)}
+.txv-matwrap th{position:sticky;top:0}
+.txv-mat tr.tot td{position:sticky;bottom:0;background:var(--thBg);z-index:1}
+.txv-toth{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.txv-toth button.link{margin-left:auto;text-transform:none;letter-spacing:0;font-size:13px}
 .txv-filters{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;align-items:end}
 .txv-filters>div{min-width:0}
 .txv-filters .txv-q{grid-column:span 2}
@@ -130,7 +137,10 @@
 .txv table{border-collapse:collapse;font-size:12px;width:100%}
 .txv th,.txv td{padding:5px 8px;border-bottom:1px solid var(--line,#dde1e6);text-align:left;vertical-align:top;white-space:nowrap}
 .txv th{position:sticky;top:0;background:var(--thBg);z-index:1;font-weight:700;color:var(--ink)}\n.txv tbody tr:hover td{background:var(--hover)}
-.txv td.cm{white-space:normal;min-width:320px;max-width:480px}
+.txv td.cm{white-space:nowrap;max-width:460px;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.txv td.cm.open{white-space:normal;min-width:320px}
+.txv td{vertical-align:middle}
+.txv th,.txv td{padding:4px 8px}
 .txv td.num{text-align:right;font-variant-numeric:tabular-nums}
 .txv tr.spam td{color:var(--mute,#5d6570)}
 .txv mark{background:var(--mark);color:inherit;border-radius:2px}
@@ -142,7 +152,7 @@
 .txv-mat td.z{color:var(--mute,#5d6570)}
 .txv-mat td.spam{color:var(--bad,#b42318);font-weight:700}
 .txv-mat tr.tot td{font-weight:700;border-top:2px solid var(--acc,#2f5bd3)}
-.txv-tbl{max-height:55vh}
+.txv-tbl{max-height:none}
 .txv td.rx{color:var(--rx);font-weight:600}
 .txv td.tx{color:var(--tx);font-weight:600}
 .txv tr.k-rx td:first-child{box-shadow:inset 3px 0 0 var(--rx)}
@@ -242,8 +252,8 @@
       <button class="sec" id="txv-dup" aria-pressed="false" ${dupHashes ? '' : 'disabled'} title="Show only rows whose transaction hash appears more than once">Duplicate hashes (${dupHashes.toLocaleString()} hash${dupHashes === 1 ? '' : 'es'} · ${dupRows.toLocaleString()} rows)</button>
       <button class="link" id="txv-clear">Clear search</button></div>
     <p class="txv-hint" id="txv-dupnote" hidden>Showing rows that share a transaction hash, grouped together. Some are normal — one transaction can give several rows (e.g. a swap plus its fee, or a multi-token transfer). Look for groups where the same amount and currency appear twice: those are real duplicates.</p>
-    <h3>Totals <span class="txv-hint" style="text-transform:none;letter-spacing:0">— of the rows shown; click a number to show those rows</span></h3>
-    <div class="txv-wrap"><table class="txv-mat" id="txv-mat"></table></div>
+    <h3 class="txv-toth">Totals <span class="txv-hint" style="text-transform:none;letter-spacing:0">— of the rows shown; click a number to show those rows</span><button type="button" class="link" id="txv-tottoggle" aria-expanded="true" aria-controls="txv-matwrap">Hide</button></h3>
+    <div class="txv-wrap txv-matwrap" id="txv-matwrap"><table class="txv-mat" id="txv-mat"></table></div>
     <h3>Transactions <span class="txv-legend"><span class="txv-pill rx">Received</span><span class="txv-pill tx">Sent</span><span class="txv-pill tr">Trade</span><span class="txv-pill fee">Fee only</span></span></h3>
     <div class="txv-wrap txv-tbl" id="txv-tblwrap"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody id="txv-tbody"></tbody></table></div>
     <div class="txv-bar"><span class="txv-hint" id="txv-more-note"></span><button class="sec" id="txv-more" hidden>Show more</button></div>
@@ -304,11 +314,11 @@
           return `<td class="mono">${hl(v, words)}${c === 'Transaction Hash' && dupOnly && v ? ` <span class="txv-badge">×${hashN[String(v).trim().toLowerCase()]}</span>` : ''}</td>`;
         }
         if (typeof v === 'number') return `<td class="num">${fmtNum(v)}</td>`;
-        return `<td class="${c === 'Comments' ? 'cm' : ''}">${hl(v, words)}</td>`;
+        return c === 'Comments' ? `<td class="cm" title="${esc(v)}">${hl(v, words)}</td>` : `<td>${hl(v, words)}</td>`;
       }).join('') + '</tr>'; }).join('') : `<tr><td colspan="${cols.length}" class="txv-empty">No matching transactions. Try fewer words or clear a box.</td></tr>`;
       const more = current.length - show.length;
       q('more').hidden = more <= 0; q('more').textContent = `Show ${Math.min(more, PAGE * 5).toLocaleString()} more`;
-      q('more-note').textContent = more > 0 ? `Showing ${show.length.toLocaleString()} of ${current.length.toLocaleString()} matching rows. Downloads always include all of them.` : '';
+      q('more-note').textContent = more > 0 ? `Showing ${show.length.toLocaleString()} of ${current.length.toLocaleString()} rows; more load as you scroll the table. Downloads always include all of them.` : (current.length > 12 ? 'Click a comment to see all of it.' : '');
     }
 
     function update() {
@@ -335,7 +345,13 @@
     const setDup = on => { dupOnly = on; q('dup').setAttribute('aria-pressed', on); q('dup').classList.toggle('on', on); q('dupnote').hidden = !on; };
     q('dup').onclick = () => { setDup(!dupOnly); update(); };
     q('clear').onclick = () => { Object.values(F).forEach(el => el.value = ''); setDup(false); update(); F.q.focus(); };
-    q('more').onclick = () => { shown += PAGE * 5; renderRows(); };
+    const setTot = open => { q('matwrap').hidden = !open; q('tottoggle').textContent = open ? 'Hide' : 'Show'; q('tottoggle').setAttribute('aria-expanded', open); try { localStorage.setItem('cls_totals', open ? '1' : '0'); } catch {} };
+    q('tottoggle').onclick = () => setTot(q('matwrap').hidden);
+    try { if (localStorage.getItem('cls_totals') === '0') setTot(false); } catch {}
+    const loadMore = () => { if (shown >= current.length) return; const w = q('tblwrap'), top = w.scrollTop; shown += PAGE * 5; renderRows(); w.scrollTop = top; };
+    q('more').onclick = loadMore;
+    q('tblwrap').addEventListener('scroll', () => { const w = q('tblwrap'); if (w.scrollTop + w.clientHeight > w.scrollHeight - 400) loadMore(); });
+    q('tbody').addEventListener('click', e => { const td = e.target.closest('td.cm'); if (td && !getSelection().toString()) td.classList.toggle('open'); });
     q('mat').addEventListener('click', e => {
       const td = e.target.closest('td.c'); if (!td) return;
       const same = F.wal.value === td.dataset.w && F.grp.value === td.dataset.g;
