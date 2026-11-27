@@ -910,11 +910,66 @@ function cosmosHint(types, msgs) {
 // Free REST nodes keep different amounts of history (some only recent blocks) and cosmos.directory rotates between them,
 // so ask several in parallel and page through the one that knows the most transactions for this address.
 const cosmosRests = c => { const n = c.dir === 'cosmoshub' ? 'cosmos' : c.dir; return [`https://rest.cosmos.directory/${c.dir}`, `https://${n}-rest.publicnode.com`, `https://${n}-api.polkachu.com`]; };
+// Celestia: Celenium keeps the full history (free, no key). Its data is turned into the same shape the node search returns.
+const CELENIUM = 'https://api-mainnet.celenium.io/v1';
+async function celeniumGet(path) {
+  for (let i = 0; i < 6; i++) {
+    if (STOP) throw new Error('Stopped');
+    const r = await fetch(CELENIUM + path);
+    if (r.ok) return r.json();
+    if (r.status === 429 || r.status >= 500) { await sleep(1200 * (i + 1)); continue; }
+    throw new Error(`Celenium: HTTP ${r.status}`);
+  }
+  throw new Error('Celenium: too many retries');
+}
+const celSnake = k => k.replace(/^[A-Z]/, c => c.toLowerCase()).replace(/[A-Z]/g, c => '_' + c.toLowerCase());
+const celMsg = m => { const o = {'@type': '/celenium.' + (m.type === 'IBCTransfer' ? 'MsgTransfer' : m.type)}; for (const [k, v] of Object.entries(m.data || {})) o[celSnake(k)] = v; return o; };
+async function celeniumTxs(chain, addr, opt, seen) {
+  // /txs lists only transactions this address signed; /messages also lists ones that paid it (sends, multi-sends, IBC receives)
+  const txs = new Map(); let cutoff = null;
+  for (const [path, pick] of [[`/address/${addr}/txs`, t => ({...t, signed: true})], [`/address/${addr}/messages`, m => m.tx && {hash: m.tx.hash, time: m.time, fee: m.tx.fee, status: m.tx.status, messages_count: m.tx.messages_count, memo: m.tx.memo, inMsgs: [m]}]]) {
+    for (let p = 0; p < opt.maxPages; p++) {
+      const list = await celeniumGet(`${path}?limit=100&offset=${p * 100}&sort=desc`) || [];
+      for (const x of list) { const t = pick(x); if (!t?.hash) continue; const old = txs.get(t.hash); if (!old) txs.set(t.hash, t); else if (!old.signed && t.inMsgs) old.inMsgs.push(...t.inMsgs); }
+      if (list.length < 100) break;
+      const ts = new Date(list[list.length - 1].time); if (opt.from && ts < opt.from) break;
+      if (p === opt.maxPages - 1 && (!cutoff || ts > cutoff)) cutoff = ts;
+    }
+  }
+  let n = 0;
+  for (const t of txs.values()) {
+    if (seen.has(t.hash)) continue;
+    if (!t.signed && t.inMsgs) { // paid to this address by someone else: the amount is in the message (skips airdrop multi-sends with thousands of events)
+      const ev = [], at = (sender, amount) => ev.push({type: 'transfer', attributes: [{key: 'recipient', value: addr}, {key: 'sender', value: sender || ''}, {key: 'amount', value: amount}]});
+      for (const m of t.inMsgs) { const d = m.data || {};
+        if (m.type === 'MsgSend') (d.Amount || []).forEach(c => at(d.FromAddress, c.Amount + c.Denom));
+        else if (m.type === 'MsgMultiSend') (d.Outputs || []).filter(o => o.Address === addr).forEach(o => (o.Coins || []).forEach(c => at(d.Inputs?.[0]?.Address, c.Amount + c.Denom)));
+        else if (m.type === 'MsgRecvPacket') { const pk = d.Packet?.Data || {}; if (pk.Receiver === addr && pk.Amount) { const base = String(pk.Denom || '').split('/').pop(); at(pk.Sender, pk.Amount + base); } }
+      }
+      if (ev.length) { seen.set(t.hash, {txhash: t.hash, timestamp: t.time, code: t.status === 'success' ? 0 : 1, tx: {body: {messages: t.inMsgs.map(celMsg).map(m => ({...m, outputs: undefined, inputs: undefined}))}, auth_info: {fee: {amount: []}}}, events: ev}); n++; continue; }
+    }
+    const evs = [];
+    for (let off = 0; off < 5000; off += 100) { const e = await celeniumGet(`/tx/${t.hash}/events?limit=100&offset=${off}`) || []; evs.push(...e); if (e.length < 100) break; }
+    const msgs = (await celeniumGet(`/tx/${t.hash}/messages`) || []).map(celMsg);
+    seen.set(t.hash, {txhash: t.hash, timestamp: t.time, code: t.status === 'success' ? 0 : 1,
+      tx: {body: {messages: msgs, memo: t.memo || ''}, auth_info: {fee: {amount: +t.fee ? [{denom: chain.denom, amount: String(t.fee)}] : []}}},
+      events: evs.map(e => ({type: e.type, attributes: Object.entries(e.data || {}).map(([key, value]) => ({key, value: String(value)}))}))});
+    n++; if (n % 50 === 0) log(`   Celestia: ${n.toLocaleString()} of ${txs.size.toLocaleString()} transactions read…`);
+  }
+  // accounts that existed at Celestia's launch (genesis allocation / airdrop) start with a balance that has no transaction
+  try { const a = await celeniumGet(`/address/${addr}`); if (+a.first_height === 0 && !opt.from) log(`   ℹ Celestia: this address existed at Celestia's launch (Oct 2023) — any genesis allocation or airdrop it got has no transaction and is not listed.`, 'w'); } catch (e) {}
+  return cutoff;
+}
 async function fetchCosmos(chain, addr, opt) {
   const seen = new Map(); let cutoff = null;
+  let celOk = false;
+  if (chain.id === 'tia') {
+    try { cutoff = await celeniumTxs(chain, addr, opt, seen); celOk = true; }
+    catch (e) { log(`   ⚠ Celestia: Celenium unavailable (${String(e.message).slice(0, 60)}) — using public nodes (recent history only).`, 'w'); seen.clear(); }
+  }
   const url = (base, q, page, legacy) => legacy ? `${base}/cosmos/tx/v1beta1/txs?events=${encodeURIComponent(q)}&pagination.limit=50&pagination.offset=${(page - 1) * 50}&order_by=ORDER_BY_DESC`
                                                 : `${base}/cosmos/tx/v1beta1/txs?query=${encodeURIComponent(q)}&page=${page}&limit=50&order_by=ORDER_BY_DESC`;
-  for (const q of [`message.sender='${addr}'`, `transfer.recipient='${addr}'`]) {
+  for (const q of celOk ? [] : [`message.sender='${addr}'`, `transfer.recipient='${addr}'`]) {
     // page 1 from every node at once; keep the node reporting the most transactions
     let best = null;
     for (const legacy of [false, true]) {
@@ -937,7 +992,7 @@ async function fetchCosmos(chain, addr, opt) {
       await sleep(250);
     }
   }
-  if (seen.size && !cutoff) { // free nodes prune old blocks (Cosmos Hub keeps months, Osmosis about a week, Celestia about a day)
+  if (celOk) log(`   Celestia: full history from Celenium (${seen.size.toLocaleString()} transactions).`); else if (seen.size && !cutoff) { // free nodes prune old blocks (Cosmos Hub keeps months, Osmosis about a week, Celestia about a day)
     const oldest = new Date(Math.min(...[...seen.values()].map(r => +new Date(r.timestamp))));
     log(`   ℹ ${chain.name}: oldest transaction the free nodes still have is ${oldest.toISOString().slice(0, 10)}. Public nodes delete old history, so anything before that is NOT included — check the wallet on mintscan.io.`, 'w');
   } else if (!seen.size) log(`   ℹ ${chain.name}: no transactions found. Public nodes delete old history (Osmosis/Celestia keep only days), so older activity may exist — check the wallet on mintscan.io.`, 'w');
