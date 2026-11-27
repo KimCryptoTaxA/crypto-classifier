@@ -15,10 +15,14 @@ Only one file was added (webapp-bridge.js) and one line in evm-tx-classifier.htm
 
 How to test it (admins only)
 ----------------------------
-1. Host these three files together on any HTTPS static host, for example GitHub Pages:
+1. Host these files together (same folder) on any HTTPS static host, for example GitHub Pages:
      evm-tx-classifier.html
      classifier-chains.js
      webapp-bridge.js
+     excel-export.js          (Excel file with Transactions, Totals, Summary, Wallets sheets)
+     tx-viewer.js             ("View transactions" search window + Light/Dark switch)
+     transaction-viewer.html  (stand-alone viewer: open a saved Excel file and search it)
+     crypto-transaction-classifier.zip  (the "Helper off · get it" button downloads this)
    (e.g. a "classifier" folder in a GitHub repo with Pages turned on)
 2. Open the hosted evm-tx-classifier.html once in your browser to check it loads.
 3. In the web app: Admin > EVM classifier (test) > paste the page address >
@@ -26,6 +30,13 @@ How to test it (admins only)
 4. Open a client > "Classify wallets", or use the Classifier tab.
 5. When you are happy, change "Who can use it" to "Everyone". Analysts then see the Classifier tab
    and the "Classify wallets" button. Set it to "Off" to hide it again at any time.
+
+View transactions / Transaction Viewer
+--------------------------------------
+After a fetch, "View transactions" opens a search window: live search, dropdowns (type, category,
+wallet, currency, group, exchange transfers), date & time range, duplicate hashes, totals, and
+"Download all results" / "Download these results". transaction-viewer.html does the same for a saved
+Excel file. Results stay only in that browser tab; nothing is saved on GitHub or a server.
 
 API keys
 --------

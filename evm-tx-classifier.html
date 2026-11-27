@@ -12,9 +12,22 @@
 <script src="excel-export.js?v=1"></script>
 <script src="tx-viewer.js?v=13"></script>
 <style>
-:root{--bg:#eef2f7;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#e8edf4;color-scheme:light}
-:root[data-theme="dark"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
-@media (prefers-color-scheme:dark){:root[data-theme="auto"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}}
+:root{--bg:#eef2f7;--view:#1f2a44;--viewInk:#fff;--xl:#1e7145;--xlInk:#fff;--danger:#c0262d;--dangerBg:#fdecec;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#e8edf4;color-scheme:light}
+:root[data-theme="dark"]{--bg:#121417;--view:#d6deee;--viewInk:#111827;--xl:#4ac08a;--xlInk:#0c0e10;--danger:#ff7b72;--dangerBg:rgba(255,123,114,.14);--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root[data-theme="auto"]{--bg:#121417;--view:#d6deee;--viewInk:#111827;--xl:#4ac08a;--xlInk:#0c0e10;--danger:#ff7b72;--dangerBg:rgba(255,123,114,.14);--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}}
+details.fmts{margin:-2px 0 6px}
+details.fmts>summary{cursor:pointer;font-size:12px;color:var(--acc);width:max-content}
+details.fmts p{margin:4px 0 0;font-size:12px}
+.keys{display:flex;flex-direction:column;gap:6px}
+.keyrow{display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(140px,1fr) 16px minmax(110px,.8fr);gap:8px;align-items:center}
+.keyrow label{margin:0;display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.keyrow label small{font-weight:400;color:var(--mute);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.keyrow input{padding:6px 9px}
+.keyrow .keyok{color:var(--ok);font-weight:700;visibility:hidden}
+.keyrow.has .keyok{visibility:visible}
+.keyrow.has input{border-color:var(--ok)}
+.keyhint{font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:560px){.keyrow{grid-template-columns:1fr 16px}.keyrow label{grid-column:1/-1}.keyhint{display:none}}
 .themesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--card);padding:3px;gap:2px}
 .themesw button{border:0;background:transparent;color:var(--mute);padding:5px 12px;border-radius:999px;font-weight:600;font-size:12.5px;cursor:pointer}
 .themesw button[aria-pressed="true"]{background:var(--acc);color:var(--accInk)}
@@ -42,6 +55,26 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:12.
 button{font:inherit;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--acc);background:var(--acc);color:var(--accInk);cursor:pointer}
 button.sec{background:transparent;color:var(--acc)}
 button:disabled{opacity:.45;cursor:not-allowed}
+button.view{background:var(--view);border-color:var(--view);color:var(--viewInk)}
+button.excel{background:var(--xl);border-color:var(--xl);color:var(--xlInk)}
+button.danger{background:transparent;border-color:var(--danger);color:var(--danger)}
+button.danger:hover:not(:disabled){background:var(--dangerBg)}
+button.danger.solid{background:var(--danger);color:#fff}
+button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+dialog.ask{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);padding:20px 22px;max-width:440px;width:calc(100% - 32px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog.ask::backdrop{background:rgba(10,14,20,.5)}
+dialog.ask h3{margin:0 0 8px;font-size:17px;color:var(--danger)}
+dialog.helpdlg{max-width:560px}
+dialog.helpdlg h3{color:var(--ink)}
+dialog.helpdlg ol.steps{margin:6px 0 12px;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+dialog.helpdlg a.dl{font-weight:700}
+a.btnlink{display:inline-flex;align-items:center;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--acc);color:var(--acc);text-decoration:none}
+.topright{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.helperbtn{font:600 12.5px/1 system-ui,sans-serif;padding:7px 12px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);cursor:pointer}
+.helperbtn::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:7px;vertical-align:1px}
+.helperbtn.on{border-color:var(--ok);color:var(--ok)}
+dialog.ask ul{margin:8px 0 12px;padding-left:20px;color:var(--mute)}
+dialog.ask .btns{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px}
 .actions{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
 #log{font-family:ui-monospace,Menlo,monospace;font-size:12px;max-height:200px;overflow:auto;white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px;margin:0}
 .e{color:var(--bad)}.w{color:var(--warn)}.g{color:var(--ok)}
@@ -96,7 +129,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 </head>
 <body>
 <main>
-<div class="topbar"><h1>Crypto Transaction Classifier</h1><div class="themesw" id="themeSw" role="group" aria-label="Colour theme"></div></div>
+<div class="topbar"><h1>Crypto Transaction Classifier</h1><div class="topright"><button type="button" class="helperbtn" id="helperBtn" hidden></button><div class="themesw" id="themeSw" role="group" aria-label="Colour theme"></div></div></div>
 <p class="sub">Checks which blockchains your wallets are active on, pulls their history live from block explorers, classifies each transaction (DeFi, swap, NFT, bridge, staking, transfer, scam/spam), and exports a CoinTracking-style Excel file.</p>
 
 <details class="guide" id="guide">
@@ -133,7 +166,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
         <li>ChangeNOW-style swaps are paired by time (sale up to 3 hours before the payout) — rows marked “(review)” are best guesses.</li>
         <li>Very active wallets may hit the page limit; the log warns you.</li>
         <li>Kava isn't supported. Solana, Casper, Bittensor, BNB Chain, the Moralis-only chains and the Subscan chains need a key (Polkadot and Kusama don't).</li>
-        <li>Cardano, Casper, exchange labels and the Blockscout PRO key need the Crypto Validation Database or the Mac helper. Bitcoin xpub/zpub works everywhere (slower without the helper).</li>
+        <li>Cardano, Casper, exchange labels and the Blockscout PRO key need the helper (button at the top right). Bitcoin xpub/zpub works everywhere (slower without the helper).</li>
         <li>Free API limits apply per key, so use your own.</li>
       </ul>
     </div>
@@ -144,7 +177,8 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 <div class="grid">
   <section class="card">
     <h2>1. Wallets</h2>
-    <label>Wallet addresses <span class="hint">— one per line, any chain: 0x…/xdc…, Solana, bc1…/xpub/zpub, T… (Tron), cosmos1…/osmo1…, EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… public key (Casper), addr1…/stake1… (Cardano), ltc1…, D… (Doge), 5… (Bittensor / Substrate), 1… (Polkadot), C…/H… (Kusama), thor1… (THORChain), kaspa:q… (Kaspa), ICP principal or account ID, B62q… (Mina), SP… (Stacks), DAG… (Constellation). Each wallet is named chain code + last 6 characters of its address, e.g. ETH_d18dda, XRP_8DuaLh.</span></label>
+    <label for="addrs">Wallet addresses <span class="hint">— one per line, any supported chain. Named chain code + last 6 characters, e.g. ETH_d18dda.</span></label>
+    <details class="fmts"><summary>Supported address formats</summary><p class="hint">0x…/xdc… (EVM), Solana, bc1…/xpub/zpub (Bitcoin), ltc1… (Litecoin), D… (Doge), T… (Tron), cosmos1…/osmo1…/celestia1… (Cosmos), EQ…/UQ… (TON), r… (XRP), G… (Stellar), 0.0.123 (Hedera), Algorand, f1…/f0… (Filecoin), 0x…64 hex (IOTA), 01…/02… (Casper), addr1…/stake1… (Cardano), 5… (Bittensor/Substrate), 1… (Polkadot), C…/H… (Kusama), thor1… (THORChain), kaspa:q… (Kaspa), ICP, B62q… (Mina), SP… (Stacks), DAG… (Constellation).</p></details>
     <textarea id="addrs" placeholder="0x1234...abcd&#10;bc1q...&#10;cosmos1..."></textarea>
     <div class="row">
       <div><label>From date <span class="hint">(optional)</span></label><input type="date" id="dFrom"></div>
@@ -172,32 +206,29 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
   </section>
 
   <section class="card">
-    <h2>3. API keys <span class="hint">(optional — each unlocks specific chains/explorers)</span></h2>
-    <label>Moralis API key <span class="hint">— free or paid at moralis.com; when entered, all Moralis EVM chains use it (labelled history incl. BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad…)</span></label>
-    <input type="password" id="moralisKey" autocomplete="off">
-    <label>Taostats API key <span class="hint">— free tier at taostats.io (dash.taostats.io); needed for Bittensor (TAO)</span></label>
-    <input type="password" id="taostatsKey" autocomplete="off">
-    <label>Subscan API key <span class="hint">— free at support.subscan.io (“API key”); needed for the Substrate chains (Astar, Moonbeam, Bifrost, Centrifuge, Avail, Vara, Enjin, peaq…). Polkadot &amp; Kusama work without it.</span></label>
-    <input type="password" id="subscanKey" autocomplete="off">
-    <label>Blockberry API key <span class="hint">— free at api.blockberry.one (the data behind Minascan); needed for Mina Protocol. Mina also needs the local helper (or the web app). Staking payouts are fetched one by one, so allow ~3 s each.</span></label>
-    <input type="password" id="blockberryKey" autocomplete="off">
-    <label>Helius API key <span class="hint">— free at helius.dev; needed for Solana</span></label>
-    <input type="password" id="heliusKey" autocomplete="off">
-    <div class="row">
-      <div><label>OpenSea API key <span class="hint">— free; NFT sales</span></label><input type="password" id="openseaKey" autocomplete="off"></div>
-      <div><label>Zerion API key <span class="hint">— free dev key; DeFi labels</span></label><input type="password" id="zerionKey" autocomplete="off"></div>
+    <h2>3. API keys <span class="hint" id="keyCount"></span></h2>
+    <p class="hint" style="margin:0 0 8px">Optional. Each key unlocks specific chains and is sent only to its own service. Keys stay in this browser.</p>
+    <div class="keys">
+      <div class="keyrow"><label for="zerionKey"><b>Zerion</b><small>DeFi labels</small></label><input type="password" id="zerionKey" autocomplete="off" placeholder="paste key" aria-describedby="zerionKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="zerionKey_h" title="">zerion.io · free dev key</span></div>
+      <div class="keyrow"><label for="openseaKey"><b>OpenSea</b><small>NFT sales</small></label><input type="password" id="openseaKey" autocomplete="off" placeholder="paste key" aria-describedby="openseaKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="openseaKey_h" title="">opensea.io · free</span></div>
+      <div class="keyrow"><label for="esKey"><b>Etherscan V2</b><small>Linea free; BNB & Gnosis paid</small></label><input type="password" id="esKey" autocomplete="off" placeholder="paste key" aria-describedby="esKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="esKey_h" title="">etherscan.io</span></div>
+      <div class="keyrow"><label for="dbKey"><b>DeBank Cloud</b><small>BNB, Gnosis, Linea fallback</small></label><input type="password" id="dbKey" autocomplete="off" placeholder="paste key" aria-describedby="dbKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="dbKey_h" title="">pay-per-use</span></div>
+      <div class="keyrow"><label for="moralisKey"><b>Moralis</b><small>Most EVM chains: BNB, Gnosis, Linea, Cronos, Monad…</small></label><input type="password" id="moralisKey" autocomplete="off" placeholder="paste key" aria-describedby="moralisKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="moralisKey_h" title="When entered, all Moralis EVM chains use it">moralis.com · free</span></div>
+      <div class="keyrow"><label for="bsKey"><b>Blockscout PRO</b><small>120+ EVM chains, faster</small></label><input type="password" id="bsKey" autocomplete="off" placeholder="paste key" aria-describedby="bsKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="bsKey_h" title="Needs the local helper (or the web app)">dev.blockscout.com · free</span></div>
     </div>
-    <label>CSPR.cloud access token <span class="hint">— free (request at cspr.cloud); needed for Casper, uses the helper</span></label>
-    <input type="password" id="csprKey" autocomplete="off">
-    <label>Blockscout PRO API key <span class="hint">— free at dev.blockscout.com; one key for 120+ chains, faster and fewer rate limits</span></label>
-    <input type="password" id="bsKey" autocomplete="off">
-    <label>Etherscan API V2 key <span class="hint">— Linea works on the free plan; BNB Chain &amp; Gnosis need a paid plan</span></label>
-    <input type="password" id="esKey" autocomplete="off">
-    <label>DeBank Cloud AccessKey <span class="hint">— pay-per-use; used for BNB Chain/Gnosis/Linea when Etherscan can't</span></label>
-    <input type="password" id="dbKey" autocomplete="off">
-    <label class="check"><input type="checkbox" id="remember"> Remember keys in this browser</label>
-    <p class="hint">Each key is sent only to its own service (moralis, taostats, helius, opensea, zerion, blockscout, etherscan, debank). The Blockscout key, Cardano, Casper and exchange labels need the local helper: run <code>python3 start-classifier.py</code>.</p>
-    <button type="button" class="sec" id="testBs" style="margin-top:8px">Test Blockscout key</button> <span id="testBsOut" class="hint"></span>
+    <details class="pick" id="moreKeys"><summary><span>More keys</span><small class="hint">Solana, Polkadot &amp; Substrate, Bittensor, Mina, Casper</small><span class="pcount" id="pc_keys"></span></summary>
+      <div class="keys pickbody">
+      <div class="keyrow"><label for="heliusKey"><b>Helius</b><small>Solana</small></label><input type="password" id="heliusKey" autocomplete="off" placeholder="paste key" aria-describedby="heliusKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="heliusKey_h" title="">helius.dev · free</span></div>
+      <div class="keyrow"><label for="subscanKey"><b>Subscan</b><small>Polkadot, Kusama, Astar, Moonbeam…</small></label><input type="password" id="subscanKey" autocomplete="off" placeholder="paste key" aria-describedby="subscanKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="subscanKey_h" title="">support.subscan.io · free</span></div>
+      <div class="keyrow"><label for="taostatsKey"><b>Taostats</b><small>Bittensor (TAO)</small></label><input type="password" id="taostatsKey" autocomplete="off" placeholder="paste key" aria-describedby="taostatsKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="taostatsKey_h" title="">dash.taostats.io · free</span></div>
+      <div class="keyrow"><label for="blockberryKey"><b>Blockberry</b><small>Mina (needs the helper)</small></label><input type="password" id="blockberryKey" autocomplete="off" placeholder="paste key" aria-describedby="blockberryKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="blockberryKey_h" title="Staking payouts are fetched one by one, so allow ~3 s each">api.blockberry.one · free</span></div>
+      <div class="keyrow"><label for="csprKey"><b>CSPR.cloud</b><small>Casper (needs the helper)</small></label><input type="password" id="csprKey" autocomplete="off" placeholder="paste key" aria-describedby="csprKey_h"><span class="keyok" aria-hidden="true">✓</span><span class="hint keyhint" id="csprKey_h" title="">cspr.cloud · free</span></div>
+      </div>
+    </details>
+    <div class="row" style="align-items:center;margin-top:8px">
+      <label class="check" style="margin:0;flex:none"><input type="checkbox" id="remember"> Remember keys in this browser</label>
+      <div style="flex:none;min-width:0"><button type="button" class="sec" id="testBs">Test Blockscout key</button> <span id="testBsOut" class="hint"></span></div>
+    </div>
   </section>
 
   <section class="card">
@@ -210,9 +241,30 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
   <button id="scan">① Scan: where are these wallets active?</button>
   <button id="run" disabled>② Fetch &amp; classify ticked</button>
   <button id="stop" class="sec" disabled>Stop</button>
-  <button id="view" disabled>View transactions</button>
-  <button id="xlsx" class="sec" disabled>Download Excel (.xlsx)</button>
+  <button id="refresh" class="sec" title="Scan and fetch the same wallet addresses again">↻ Refresh data</button>
+  <button id="view" class="view" disabled>View transactions</button>
+  <button id="xlsx" class="excel" disabled>⬇ Download Excel (.xlsx)</button>
+  <button id="clearSaved" class="danger" title="Forget the saved wallet addresses and last results in this browser">Clear saved data</button>
 </div>
+<dialog class="ask helpdlg" id="helperAsk" aria-labelledby="helperAskT">
+  <h3 id="helperAskT">Get the helper</h3>
+  <p style="margin:0">The helper is a small program that runs on your computer. It unlocks the parts browsers can't reach on their own:</p>
+  <ul><li>Blockscout PRO key, Cardano, Casper, Mina and Metis</li><li>exchange labels on EVM chains (Binance, KuCoin, Coinbase…)</li></ul>
+  <ol class="steps">
+    <li id="helperStep1"><b>Download</b> the classifier folder: <a class="dl" id="helperDl" href="crypto-transaction-classifier.zip" download>crypto-transaction-classifier.zip</a> and unzip it.</li>
+    <li><b>Start it.</b> Mac: double-click <code>Start Classifier (Mac).command</code> (first time: right-click › Open › Open). Windows: double-click <code>Start Classifier (Windows).bat</code>.</li>
+    <li><b>Use the page that opens</b> at <code>http://127.0.0.1:8765</code> (or click "Open the helper page" below once it is running). Keep the Terminal / black window open while you work; close it to stop. Saved addresses and results on this page don't carry over, so paste the addresses there.</li>
+  </ol>
+  <p class="hint" style="margin:0">Needs Python 3 (already on most Macs; on Windows get it from python.org and tick "Add python.exe to PATH"). The helper only talks to the explorers listed in the guide and stores nothing.</p>
+  <div class="btns"><a class="btnlink sec" id="helperOpen" href="http://127.0.0.1:8765/evm-tx-classifier.html" target="_blank" rel="noopener">Open the helper page</a><button type="button" id="helperClose">Close</button></div>
+</dialog>
+<dialog class="ask" id="clearAsk" aria-labelledby="clearAskT">
+  <h3 id="clearAskT">Clear saved data?</h3>
+  <p style="margin:0">This removes from this browser:</p>
+  <ul><li>the saved wallet addresses, dates and options</li><li id="clearAskRows">the last fetched results</li></ul>
+  <p class="hint" style="margin:0">It does not delete anything online and does not touch your API keys. What is on screen stays until you reload. This cannot be undone.</p>
+  <div class="btns"><button type="button" class="sec" id="clearNo">Cancel</button><button type="button" class="danger solid" id="clearYes">Yes, clear saved data</button></div>
+</dialog>
 
 <section class="card" id="scanCard" hidden>
   <h2>Scan results <span class="hint">— ticked = will be fetched. ✓ active · — no activity · ⚠ error · 🔑 needs key</span></h2>
@@ -941,7 +993,7 @@ async function scan() {
   const chains = selectedChains(); if (!chains.length) { log('Select at least one blockchain.', 'e'); return; }
   const exps = EXPLORERS.filter(x => $('ex_' + x.id)?.checked);
   const opt = getOpt(); saveKeys(); await helperUp();
-  if (!HELPER) log('ℹ Helper not running: Blockscout PRO, Cardano, Casper and exchange labels will show ⚠ (Bitcoin xpub/zpub still works, just slower). Run "python3 start-classifier.py" to enable them.', 'w');
+  if (!HELPER) log('ℹ Helper not running: Blockscout PRO, Cardano, Casper and exchange labels will show ⚠ (Bitcoin xpub/zpub still works, just slower). Click "Helper off · get it" at the top for the download and steps.', 'w');
   STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false;
   SCAN = [];
   for (const input of raw) {
@@ -1056,6 +1108,7 @@ async function run() {
   } catch (e) { log(e.message === 'Stopped' ? 'Stopped — showing what was fetched so far.' : 'Error: ' + e.message, e.message === 'Stopped' ? 'w' : 'e'); }
   $('scan').disabled = false; $('run').disabled = false; $('stop').disabled = true; $('xlsx').disabled = !RESULT.length; $('view').disabled = !RESULT.length;
   render();
+  RESTORED = null; saveLast();
 }
 
 /* ---------- Explorer enrichment (deBridge, LayerZero, Wormhole, OpenSea, Zerion) ---------- */
@@ -1147,7 +1200,7 @@ async function enrich(opt) {
   const xfers = new Map(); for (const ns of notes.values()) for (const n of ns) if (n.xfer && !xfers.has(n.xfer.id)) xfers.set(n.xfer.id, n.xfer);
   for (const x of xfers.values()) pairXfer(x, hits);
   if ($('ex_labels')?.checked) {
-    if (!HELPER) log('   Exchange labels skipped: they need the helper (Start Classifier) or the Crypto Validation Database.', 'w');
+    if (!HELPER) log('   Exchange labels skipped: they need the helper (button at the top right).', 'w');
     else try { await labelPass(hits); } catch (e) { log(`   Exchange labels: ${e.message.slice(0, 100)}`, 'w'); }
   }
   let hit = hits.size;
@@ -1214,7 +1267,85 @@ async function exportXlsx() {
 function viewTransactions() {
   if (!window.openTxViewer) { log('The search window did not load — reload the page.', 'e'); return; }
   const rows = excelRows();
-  openTxViewer({rows, cols: COLS, wallets: excelWallets(), title: `Transactions — ${rows.length.toLocaleString()} rows from ${WALLETS.filter(w => w.wallet !== '—').length} wallet/chain pairs`});
+  const old = restoredNote();
+  openTxViewer({rows, cols: COLS, wallets: excelWallets(), title: `${old ? 'Saved results from ' + old + ' — ' : 'Transactions — '}${rows.length.toLocaleString()} rows from ${WALLETS.filter(w => w.wallet !== '—').length} wallet/chain pairs`});
+}
+
+/* ---------------- Remember the form and the last results (this browser only) ----------------
+   The form (addresses, dates, options, ticked chains) goes to localStorage; the last results to IndexedDB,
+   so an accidental refresh does not lose a long fetch. "Clear saved data" removes both. */
+const FORM_KEY = 'cls_form', DB_NAME = 'cls_saved', DB_STORE = 'last';
+let RESTORED = null; // {savedAt, addrs} when the results on screen came from storage
+let FORM_CLEARED = false; // after "Clear saved data": don't save the form again until the user changes something
+const FORM_IDS = ['addrs', 'dFrom', 'dTo', 'maxPages', 'utc', 'exSpam', 'inInternal', 'custom'];
+function saveForm() {
+  if (FORM_CLEARED) return;
+  try {
+    const f = {}; FORM_IDS.forEach(id => { const el = $(id); if (el) f[id] = el.type === 'checkbox' ? el.checked : el.value; });
+    f.ticks = {}; document.querySelectorAll('#chainList input[id^="ch_"], #explorerList input[id^="ex_"]').forEach(cb => { f.ticks[cb.id] = cb.checked; });
+    localStorage.setItem(FORM_KEY, JSON.stringify(f));
+  } catch {}
+}
+function restoreForm() {
+  try {
+    const f = JSON.parse(localStorage.getItem(FORM_KEY) || 'null'); if (!f) return false;
+    FORM_IDS.forEach(id => { const el = $(id); if (el && id in f) { if (el.type === 'checkbox') el.checked = !!f[id]; else el.value = f[id]; } });
+    Object.entries(f.ticks || {}).forEach(([id, v]) => { const cb = $(id); if (cb) cb.checked = v; });
+    return !!f.addrs;
+  } catch { return false; }
+}
+function idb(mode, fn) {
+  return new Promise((res, rej) => {
+    let rq; try { rq = indexedDB.open(DB_NAME, 1); } catch (e) { return rej(e); }
+    rq.onupgradeneeded = () => rq.result.createObjectStore(DB_STORE);
+    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => { const db = rq.result, tx = db.transaction(DB_STORE, mode), st = tx.objectStore(DB_STORE); let out; const r = fn(st); if (r) r.onsuccess = () => { out = r.result; }; tx.oncomplete = () => { db.close(); res(out); }; tx.onerror = () => { db.close(); rej(tx.error); }; };
+  });
+}
+const packScan = () => SCAN.map(e => ({input: e.input, det: e.det, items: e.items.map(x => ({chain: x.chain.id, addr: x.addr, status: x.status, count: x.count, note: x.note, sel: x.sel})), explorers: e.explorers.map(x => ({ex: x.ex.id, count: x.count}))}));
+const unpackScan = list => (list || []).map(e => ({input: e.input, det: e.det, items: e.items.map(x => ({...x, chain: ALL_CHAINS.find(c => c.id === x.chain)})).filter(x => x.chain), explorers: e.explorers.map(x => ({...x, ex: EXPLORERS.find(c => c.id === x.ex)})).filter(x => x.ex)}));
+async function saveLast() {
+  if (!RESULT.length) return;
+  FORM_CLEARED = false; saveForm();
+  try { await idb('readwrite', st => st.put({savedAt: Date.now(), addrs: $('addrs').value, scan: packScan(), result: RESULT, wallets: WALLETS}, 'run')); }
+  catch (e) { log('Could not save the results in this browser (' + (e?.message || 'storage blocked') + '). They are still on screen; download the Excel to keep them.', 'w'); }
+}
+const addrSet = t => [...new Set(String(t || '').split(/[\s,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean))].sort().join('|');
+const fmtSaved = ts => { const d = new Date(ts), p = x => String(x).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())}-${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+function restoredNote() {
+  if (!RESTORED) return '';
+  if (addrSet($('addrs').value) !== addrSet(RESTORED.addrs)) log('⚠ The results on screen are the saved ones from ' + fmtSaved(RESTORED.savedAt) + ' for different wallet addresses than the ones now in the box. Click ↻ Refresh data to fetch the new addresses.', 'w');
+  return fmtSaved(RESTORED.savedAt);
+}
+async function restoreLast() {
+  let d; try { d = await idb('readonly', st => st.get('run')); } catch { return; }
+  if (!d || !d.result?.length || RESULT.length) return;
+  RESULT = d.result; WALLETS = d.wallets || []; SCAN = unpackScan(d.scan); RESTORED = {savedAt: d.savedAt, addrs: d.addrs};
+  if (!$('addrs').value.trim()) $('addrs').value = d.addrs || '';
+  renderScan(); render();
+  $('run').disabled = !SCAN.some(e => e.items.some(x => x.sel)); $('xlsx').disabled = false; $('view').disabled = false;
+  const n = WALLETS.filter(w => w.wallet !== '—').length;
+  $('log').textContent = '';
+  log(`Restored your last results: ${RESULT.length.toLocaleString()} rows from ${n} wallet/chain pair(s), fetched ${fmtSaved(d.savedAt)}.`, 'g');
+  log('View transactions and Download Excel work right away. Click ↻ Refresh data to fetch the latest transactions, or Clear saved data to remove them from this browser.');
+}
+async function refreshData() {
+  if (!$('addrs').value.trim()) { log('Enter at least one wallet address.', 'e'); return; }
+  const same = RESTORED ? addrSet($('addrs').value) === addrSet(RESTORED.addrs) : SCAN.length && addrSet($('addrs').value) === addrSet(SCAN.map(e => e.input).join('\n'));
+  if (!same || !SCAN.length) { await scan(); if (STOP || !SCAN.some(e => e.items.some(x => x.sel))) return; }
+  await run();
+}
+function askClear() {
+  const d = $('clearAsk');
+  $('clearAskRows').textContent = RESULT.length ? `the last fetched results (${RESULT.length.toLocaleString()} rows)` : 'the last fetched results (if any)';
+  if (d.showModal) { d.showModal(); $('clearNo').focus(); }
+  else if (confirm('Clear the saved wallet addresses and last results from this browser? This cannot be undone.')) clearSaved();
+}
+async function clearSaved() {
+  try { localStorage.removeItem(FORM_KEY); } catch {}
+  try { await idb('readwrite', st => st.delete('run')); } catch {}
+  RESTORED = null; FORM_CLEARED = true;
+  log('Saved addresses and results were removed from this browser.', 'g');
 }
 
 /* ---------------- Init ---------------- */
@@ -1231,11 +1362,38 @@ function saveKeys() {
   $('explorerList').innerHTML = EXPLORERS.map(x => `<label><input type="checkbox" id="ex_${x.id}" ${x.def ? 'checked' : ''}><span>${x.name}<small>${x.label} · ${x.families.map(f => f === 'evm' ? 'EVM' : 'Solana').join(' + ')}</small></span></label>`).join('');
   setupPicker();
   try { const k = JSON.parse(localStorage.getItem('evmcls_keys') || 'null'); if (k) { $('esKey').value = k.es || ''; $('dbKey').value = k.db || ''; $('bsKey').value = k.bs || ''; $('heliusKey').value = k.he || ''; $('openseaKey').value = k.os || ''; $('zerionKey').value = k.ze || ''; $('csprKey').value = k.cs || ''; $('moralisKey').value = k.mo || ''; $('taostatsKey').value = k.ts || ''; $('subscanKey').value = k.su || ''; $('blockberryKey').value = k.bb || ''; $('remember').checked = true; } } catch {}
+  const keyStatus = () => { const rows = [...document.querySelectorAll('.keyrow')]; rows.forEach(r => r.classList.toggle('has', !!r.querySelector('input').value.trim()));
+    const n = rows.filter(r => r.classList.contains('has')).length; $('keyCount').textContent = n ? `· ${n} of ${rows.length} entered` : '· none entered';
+    const more = [...document.querySelectorAll('#moreKeys .keyrow')]; $('pc_keys').textContent = `${more.filter(r => r.classList.contains('has')).length} of ${more.length} entered`; };
+  document.querySelectorAll('.keyrow input').forEach(i => i.addEventListener('input', keyStatus)); keyStatus();
   $('scan').onclick = scan;
   $('run').onclick = run;
   $('stop').onclick = () => { STOP = true; };
   $('xlsx').onclick = exportXlsx;
   $('view').onclick = viewTransactions;
+  $('refresh').onclick = refreshData;
+  $('clearSaved').onclick = askClear;
+  const inWebApp = window.parent !== window;
+  const helperState = async (fresh) => {
+    if (fresh) HELPER = null; const up = await helperUp(); const b = $('helperBtn');
+    b.hidden = inWebApp && !up;
+    b.classList.toggle('on', up); b.textContent = up ? 'Helper running' : 'Helper off · get it';
+    b.title = up ? 'The local helper is running: all chains and exchange labels are available' : 'Some chains need the local helper. Click for the download and steps.';
+    return up;
+  };
+  $('helperBtn').onclick = () => { if ($('helperBtn').classList.contains('on')) { log('✓ The helper is running: Blockscout PRO, Cardano, Casper, Mina and exchange labels are available.', 'g'); return; } $('helperAsk').showModal ? $('helperAsk').showModal() : null; };
+  $('helperClose').onclick = () => $('helperAsk').close();
+  if (!location.protocol.startsWith('http')) $('helperStep1').innerHTML = '<b>You already have the folder</b>: it is the one this page is in.';
+  helperState();
+  $('clearNo').onclick = () => $('clearAsk').close();
+  $('clearYes').onclick = () => { $('clearAsk').close(); clearSaved(); };
+  restoreForm();
+  let formTimer; const formChanged = () => { FORM_CLEARED = false; clearTimeout(formTimer); formTimer = setTimeout(saveForm, 300); };
+  document.addEventListener('input', e => { if (e.target.closest('main') && !e.target.closest('.txv-back') && e.target.type !== 'password') formChanged(); });
+  document.addEventListener('change', e => { if (e.target.closest('main') && !e.target.closest('.txv-back') && e.target.type !== 'password') formChanged(); });
+  document.querySelector('#chainList input')?.dispatchEvent(new Event('change', {bubbles: true}));
+  addEventListener('pagehide', saveForm);
+  restoreLast();
   if (window.mountThemeSwitch) mountThemeSwitch($('themeSw'));
   $('remember').onchange = saveKeys;
   $('testBs').onclick = async () => {
