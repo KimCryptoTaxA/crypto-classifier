@@ -138,7 +138,12 @@
 .txv th,.txv td{padding:5px 8px;border-bottom:1px solid var(--line,#dde1e6);text-align:left;vertical-align:top;white-space:nowrap}
 .txv th{position:sticky;top:0;background:var(--thBg);z-index:1;font-weight:700;color:var(--ink)}\n.txv tbody tr:hover td{background:var(--hover)}
 .txv td.cm{white-space:nowrap;max-width:460px;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
-.txv td.cm.open{white-space:normal;min-width:320px}
+.txv td.cm.open,.txv-tbl.wrapcm td.cm{white-space:normal;min-width:340px;max-width:560px;text-overflow:clip}
+.txv-tbl.wrapcm td{vertical-align:top}
+.txv th.cmh{white-space:nowrap}
+.txv button.txv-eye{display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--mute);font-size:11.5px;font-weight:600;vertical-align:middle;cursor:pointer}
+.txv button.txv-eye:hover{border-color:var(--acc);color:var(--acc)}
+.txv button.txv-eye[aria-pressed="true"]{background:var(--acc);border-color:var(--acc);color:var(--accInk)}
 .txv td{vertical-align:middle}
 .txv th,.txv td{padding:4px 8px}
 .txv td.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -338,7 +343,7 @@
     <h3 class="txv-toth">Totals <span class="txv-hint" style="text-transform:none;letter-spacing:0">— of the rows shown; click a number to show those rows</span><button type="button" class="link" id="txv-tottoggle" aria-expanded="true" aria-controls="txv-matwrap">Hide</button></h3>
     <div class="txv-wrap txv-matwrap" id="txv-matwrap"><table class="txv-mat" id="txv-mat"></table></div>
     <h3>Transactions <span class="txv-legend"><span class="txv-pill rx">Received</span><span class="txv-pill tx">Sent</span><span class="txv-pill tr">Trade</span><span class="txv-pill fee">Fee only</span></span></h3>
-    <div class="txv-wrap txv-tbl" id="txv-tblwrap"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody id="txv-tbody"></tbody></table></div>
+    <div class="txv-wrap txv-tbl" id="txv-tblwrap"><table><thead><tr>${cols.map(c => c === 'Comments' ? `<th class="cmh">Comments <button type="button" class="txv-eye" id="txv-eye" aria-pressed="false" title="Show all comments in full"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span>Show all</span></button></th>` : `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody id="txv-tbody"></tbody></table></div>
     <div class="txv-bar"><span class="txv-hint" id="txv-more-note"></span><button class="sec" id="txv-more" hidden>Show more</button></div>
   </div></div>`;
     (mount || document.body).appendChild(back);
@@ -434,6 +439,8 @@
     const loadMore = () => { if (shown >= current.length) return; const w = q('tblwrap'), top = w.scrollTop; shown += PAGE * 5; renderRows(); w.scrollTop = top; };
     q('more').onclick = loadMore;
     q('tblwrap').addEventListener('scroll', () => { const w = q('tblwrap'); if (w.scrollTop + w.clientHeight > w.scrollHeight - 400) loadMore(); });
+    const setWrap = on => { q('tblwrap').classList.toggle('wrapcm', on); const b = q('eye'); if (!b) return; b.setAttribute('aria-pressed', on); b.querySelector('span').textContent = on ? 'Hide' : 'Show all'; b.title = on ? 'Show comments on one line' : 'Show all comments in full'; try { localStorage.setItem('cls_wrapcm', on ? '1' : '0'); } catch {} };
+    if (q('eye')) { q('eye').onclick = e => { e.stopPropagation(); setWrap(!q('tblwrap').classList.contains('wrapcm')); }; try { if (localStorage.getItem('cls_wrapcm') === '1') setWrap(true); } catch {} }
     q('tbody').addEventListener('click', e => { const td = e.target.closest('td.cm'); if (td && !getSelection().toString()) td.classList.toggle('open'); });
     q('mat').addEventListener('click', e => {
       const td = e.target.closest('td.c'); if (!td) return;
