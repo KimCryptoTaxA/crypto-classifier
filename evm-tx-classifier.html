@@ -4,12 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Crypto Transaction Classifier</title>
-<script src="webapp-bridge.js?v=3"></script>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("cls_theme")||"light"}catch(e){document.documentElement.dataset.theme="light"}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="classifier-chains.js?v=75"></script>
+<script src="webapp-bridge.js?v=3"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="classifier-chains.js?v=77"></script>
+<script src="excel-export.js?v=1"></script>
+<script src="tx-viewer.js?v=10"></script>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#5d6570;--line:#dde1e6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#eef1f5}
-@media (prefers-color-scheme:dark){:root{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30}}
+:root{--bg:#eef2f7;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#e8edf4;color-scheme:light}
+:root[data-theme="dark"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root[data-theme="auto"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}}
+.themesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--card);padding:3px;gap:2px}
+.themesw button{border:0;background:transparent;color:var(--mute);padding:5px 12px;border-radius:999px;font-weight:600;font-size:12.5px;cursor:pointer}
+.themesw button[aria-pressed="true"]{background:var(--acc);color:var(--accInk)}
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.card{box-shadow:0 1px 2px rgba(16,24,40,.05)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 main{max-width:1280px;margin:0 auto;padding:20px 16px 60px}
@@ -44,6 +54,7 @@ th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertic
 th{position:sticky;top:0;background:var(--card);z-index:1}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 td.cm{max-width:420px}
+td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;white-space:nowrap;user-select:all}
 tr.spam td{color:var(--mute)}
 a{color:var(--acc)}
 .group{margin:10px 0 4px;font-size:12px;font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;display:flex;gap:10px;align-items:center}
@@ -85,7 +96,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
 </head>
 <body>
 <main>
-<h1>Crypto Transaction Classifier</h1>
+<div class="topbar"><h1>Crypto Transaction Classifier</h1><div class="themesw" id="themeSw" role="group" aria-label="Colour theme"></div></div>
 <p class="sub">Checks which blockchains your wallets are active on, pulls their history live from block explorers, classifies each transaction (DeFi, swap, NFT, bridge, staking, transfer, scam/spam), and exports a CoinTracking-style Excel file.</p>
 
 <details class="guide" id="guide">
@@ -199,6 +210,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
   <button id="scan">① Scan: where are these wallets active?</button>
   <button id="run" disabled>② Fetch &amp; classify ticked</button>
   <button id="stop" class="sec" disabled>Stop</button>
+  <button id="view" disabled>View transactions</button>
   <button id="xlsx" class="sec" disabled>Download Excel (.xlsx)</button>
 </div>
 
@@ -791,6 +803,7 @@ function classify(b, ctx) {
       else if (l.fromZero && !init) add('Airdrop', 'Airdrop (Received)', l, null, '', `Tokens minted directly to your wallet${proto}: ${legStr(l)}. Likely an airdrop. ${mtxt}.`);
       else if (!plain && init) add('Deposit', 'DeFi - Contract Withdrawal', l, null, b.to, `Received ${legStr(l)} from contract${proto}. ${mtxt}.`);
       else if (ctx.ownAddrs?.has(l.cp)) add('Deposit', 'Transfer (Own Wallets)', l, null, '', `Received ${legStr(l)} from your own wallet ${ctx.ownAddrs.get(l.cp)} (${short(l.cp)}). ${mtxt}.`);
+      else if (l.cpEx) add('Deposit', l.cpEx.instant ? `Instant Exchange Payout (${l.cpEx.name}) — review` : `Transfer from Exchange (${l.cpEx.name})`, l, null, '', `From ${l.cpEx.full} (${short(l.cp)}, named by the explorer). Received ${legStr(l)}. ${mtxt}.`);
       else add('Deposit', 'Transfer In', l, null, '', `Received ${legStr(l)} from ${short(l.cp)}${l.cpName ? ` (${l.cpName})` : b.toName && !init ? ` (${b.toName})` : ''}. ${mtxt}.`);
     });
     return rows;
@@ -805,6 +818,7 @@ function classify(b, ctx) {
         add('Withdrawal', 'Transfer Out (to known scam address — review)', null, l, '', `WARNING – sent ${legStr(l)} to ${longShort(l.cp)}, which ${l.cpName && /phish|scam|exploit|drainer|hacker/i.test(l.cpName) ? `is labelled "${l.cpName}"` : 'ScamSniffer lists as a scam/phishing (drainer) address'}. Possibly a scam loss, not a normal transfer. ${mtxt}.`);
       else if (ctx.contacts?.dust.has(l.cp) && lookalikeOf(l.cp, [...ctx.contacts.real].filter(x => x !== l.cp)))
         add('Withdrawal', 'Transfer Out (possible poisoning loss — review)', null, l, '', `WARNING – sent ${legStr(l)} to ${longShort(l.cp)}, which earlier sent you dust and looks like your contact ${longShort(lookalikeOf(l.cp, [...ctx.contacts.real].filter(x => x !== l.cp)))}. If this was a mistake it is a scam loss, not a normal transfer. ${mtxt}.`);
+      else if (l.cpEx) add('Withdrawal', l.cpEx.instant ? `Transfer to Instant Exchange (${l.cpEx.name})` : `Transfer to Exchange (${l.cpEx.name})`, null, l, '', `To ${l.cpEx.full} (${short(l.cp)}, named by the explorer). Sent ${legStr(l)}. ${mtxt}.`);
       else add('Withdrawal', 'Transfer Out', null, l, '', `Sent ${legStr(l)} to ${short(l.cp)}${l.cpName ? ` (${l.cpName})` : ''}. ${mtxt}.`);
     });
     return rows;
@@ -981,7 +995,7 @@ async function run() {
   if (!SCAN.length) { await scan(); if (!SCAN.length) return; }
   const opt = getOpt(); saveKeys(); await helperUp();
   $('log').textContent = 'Fetching…';
-  STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false; $('xlsx').disabled = true;
+  STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false; $('xlsx').disabled = true; $('view').disabled = true;
   RESULT = []; WALLETS = [];
   const utc = $('utc').checked;
   const ownAddrs = new Map(), usedNames = new Set();
@@ -1040,7 +1054,7 @@ async function run() {
     await enrich(opt);
     log('Done.', 'g');
   } catch (e) { log(e.message === 'Stopped' ? 'Stopped — showing what was fetched so far.' : 'Error: ' + e.message, e.message === 'Stopped' ? 'w' : 'e'); }
-  $('scan').disabled = false; $('run').disabled = false; $('stop').disabled = true; $('xlsx').disabled = !RESULT.length;
+  $('scan').disabled = false; $('run').disabled = false; $('stop').disabled = true; $('xlsx').disabled = !RESULT.length; $('view').disabled = !RESULT.length;
   render();
 }
 
@@ -1168,7 +1182,7 @@ function render() {
   $('tbody').innerHTML = show.map(r => `<tr class="${r.Category === 'Scam/Spam' || r._internal ? 'spam' : ''}">` + COLS.map(c => {
     const v = r[c];
     if (c === 'Explorer Link') return `<td><a href="${esc(v)}" target="_blank" rel="noopener">open</a></td>`;
-    if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') return `<td title="${esc(v)}">${esc(v ? short(v) : '')}</td>`;
+    if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') return `<td class="mono">${esc(v)}</td>`;
     if (typeof v === 'number') return `<td class="num">${fmtNum(v)}</td>`;
     return `<td class="${c === 'Comments' ? 'cm' : ''}">${esc(v)}</td>`;
   }).join('') + '</tr>').join('');
@@ -1176,8 +1190,12 @@ function render() {
 }
 
 /* ---------------- Excel ---------------- */
-function exportXlsx() {
-  const rows = RESULT.filter(r => !($('exSpam').checked && r.Category === 'Scam/Spam') && !(r._internal && !$('inInternal').checked)).map(r => { const o = {}; COLS.forEach(c => o[c] = r[c]); return o; });
+// The rows that go into the Excel file (same rules as before: optional spam removal, internal DEX movements only when ticked)
+const excelRows = () => RESULT.filter(r => !($('exSpam').checked && r.Category === 'Scam/Spam') && !(r._internal && !$('inInternal').checked)).map(r => { const o = {}; COLS.forEach(c => o[c] = r[c]); return o; });
+const excelWallets = () => WALLETS.map(w => ({wallet: w.wallet, chain: w.chain, addr: w.addr, rows: w.rows, note: w.note}));
+async function exportXlsx() {
+  const rows = excelRows();
+  if (window.ExcelJS && window.downloadClassifierRows) { try { return await downloadClassifierRows(rows, COLS, excelWallets()); } catch (e) { log('Styled Excel failed, using the plain version: ' + e.message, 'w'); } }
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows, {header: COLS});
   ws['!cols'] = COLS.map(c => ({wch: {Comments: 90, 'Transaction Hash': 68, 'Liquidity Pool Address': 44, 'Wallet Address': 44, 'Explorer Link': 50, Date: 20, Category: 26}[c] || 15}));
@@ -1192,6 +1210,11 @@ function exportXlsx() {
   XLSX.utils.book_append_sheet(wb, wws, 'Wallets');
   const d = new Date(), p = x => String(x).padStart(2, '0');
   XLSX.writeFile(wb, `crypto-transactions-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}.xlsx`);
+}
+function viewTransactions() {
+  if (!window.openTxViewer) { log('The search window did not load — reload the page.', 'e'); return; }
+  const rows = excelRows();
+  openTxViewer({rows, cols: COLS, wallets: excelWallets(), title: `Transactions — ${rows.length.toLocaleString()} rows from ${WALLETS.filter(w => w.wallet !== '—').length} wallet/chain pairs`});
 }
 
 /* ---------------- Init ---------------- */
@@ -1212,6 +1235,8 @@ function saveKeys() {
   $('run').onclick = run;
   $('stop').onclick = () => { STOP = true; };
   $('xlsx').onclick = exportXlsx;
+  $('view').onclick = viewTransactions;
+  if (window.mountThemeSwitch) mountThemeSwitch($('themeSw'));
   $('remember').onchange = saveKeys;
   $('testBs').onclick = async () => {
     const out = $('testBsOut'), key = bsKeyVal();

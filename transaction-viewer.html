@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transaction Viewer</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("cls_theme")||"light"}catch(e){document.documentElement.dataset.theme="light"}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="excel-export.js?v=1"></script>
+<script src="tx-viewer.js?v=10"></script>
+<style>
+:root{--bg:#eef2f7;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--bad:#b42318;--chip:#e8edf4;color-scheme:light}
+:root[data-theme="dark"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root[data-theme="auto"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}}
+.themesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--card);padding:3px;gap:2px}
+.themesw button{border:0;background:transparent;color:var(--mute);padding:5px 12px;border-radius:999px;font-weight:600;font-size:12.5px;cursor:pointer}
+.themesw button[aria-pressed="true"]{background:var(--acc);color:var(--accInk)}
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.card{box-shadow:0 1px 2px rgba(16,24,40,.05)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:48px 16px}
+h1{font-size:24px;margin:0 0 6px}
+p{color:var(--mute);margin:0 0 20px}
+.drop{border:2px dashed var(--line);border-radius:14px;background:var(--card);padding:48px 20px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--acc)}
+.drop b{display:block;font-size:16px;margin-bottom:6px}
+.drop span{color:var(--mute)}
+#msg{margin-top:14px;min-height:20px}
+.err{color:var(--bad)}
+ul{color:var(--mute);padding-left:20px;margin:24px 0 0}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<main>
+  <div class="topbar"><h1>Transaction Viewer</h1><div class="themesw" id="themeSw" role="group" aria-label="Colour theme"></div></div>
+  <p>Open an Excel file made by the Crypto Transaction Classifier to search it, see the totals, and download all rows or only the ones you found.</p>
+  <label class="drop" id="drop" tabindex="0">
+    <b>Drop the .xlsx file here</b>
+    <span>or click to choose it</span>
+    <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
+  </label>
+  <div id="msg"></div>
+  <ul>
+    <li>The file is read in this browser only. Nothing is uploaded or saved anywhere.</li>
+    <li>It reads the <b>Transactions</b> sheet (or the first sheet), and the Wallets sheet if there is one.</li>
+  </ul>
+</main>
+<script>
+const COLS = ['Type','Category','Buy Amount','Buy Currency','Sell Amount','Sell Currency','Fee Amount','Fee Currency',
+  'Exchange/Wallet Name','Comments','Date','Liquidity Pool Address','Transaction Hash','Chain','Wallet Address','Explorer Link'];
+const $ = id => document.getElementById(id);
+const say = (t, err) => { $('msg').textContent = t; $('msg').className = err ? 'err' : ''; };
+
+async function openFile(f) {
+  if (!f) return;
+  if (typeof XLSX === 'undefined') return say('The Excel reader did not load. Check the internet connection and reload.', true);
+  say('Reading ' + f.name + '…');
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), {type: 'array'});
+    const name = wb.SheetNames.find(n => /^transactions$/i.test(n)) || wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {defval: ''});
+    if (!rows.length) return say('No rows found in the "' + name + '" sheet.', true);
+    const cols = COLS.every(c => c in rows[0]) ? COLS : Object.keys(rows[0]);
+    const wsName = wb.SheetNames.find(n => /^wallets$/i.test(n));
+    const wallets = wsName ? XLSX.utils.sheet_to_json(wb.Sheets[wsName], {defval: ''}).map(w => ({wallet: w['Exchange/Wallet Name'], chain: w.Chain, addr: w['Wallet Address'], rows: w.Rows, note: w.Notes})) : [];
+    say('');
+    openTxViewer({rows, cols, wallets, title: `${f.name} — ${rows.length.toLocaleString()} rows`});
+  } catch (e) { say('Could not read this file: ' + e.message, true); }
+}
+$('file').onchange = e => { openFile(e.target.files[0]); e.target.value = ''; };
+$('drop').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } };
+['dragenter', 'dragover'].forEach(t => $('drop').addEventListener(t, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => $('drop').addEventListener(t, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+$('drop').addEventListener('drop', e => openFile(e.dataTransfer.files[0]));
+mountThemeSwitch($('themeSw'));
+</script>
+</body>
+</html>

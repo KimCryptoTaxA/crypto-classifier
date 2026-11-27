@@ -518,7 +518,7 @@ async function fetchStacks(chain, addr, opt) {
       if (stxNet) b.legs.push(natLeg(chain, stxNet > 0n ? 'in' : 'out', units((stxNet < 0n ? -stxNet : stxNet).toString(), 6), stxCp));
       for (const v of nets.values()) {
         if (!v.net) continue; const dir = v.net > 0n ? 'in' : 'out', abs = (v.net < 0n ? -v.net : v.net).toString(), cname = v.id.split('::')[0];
-        if (v.type === 'nft') { b.legs.push({dir, amount: +abs, sym: v.id.split('::')[1] || stxShort(cname), name: stxShort(cname), token: cname, kind: 'nft', id: v.nft, cp: v.cp, spam: false}); continue; }
+        if (v.type === 'nft') { b.legs.push({dir, amount: +abs, sym: v.id.split('::')[1] || stxShort(cname), name: stxShort(cname), token: cname, kind: 'NFT', id: v.nft, cp: v.cp, spam: false, fromZero: dir === 'in' && v.cp === 'mint'}); continue; }
         const m = await stxToken(v.id);
         b.legs.push({dir, amount: units(abs, m.dec), sym: m.sym, name: m.name || m.sym, token: cname, kind: 'token', id: null, cp: v.cp, spam: false});
       }
@@ -602,7 +602,7 @@ async function fetchVechain(chain, addr, opt) {
     const dir = inn ? 'in' : 'out', cp = inn ? e.from : e.to; if (out && e.to) { b.to = e.to; }
     if (ev === 'TRANSFER_VET') { const v = units(String(e.value || 0), 18); if (v) b.legs.push(natLeg(chain, dir, v, cp)); continue; }
     const c = String(e.contractAddress || '').toLowerCase();
-    if (ev === 'TRANSFER_NFT') { const m = await vcToken(c); b.legs.push({dir, amount: 1, sym: m.sym, name: m.name || m.sym, token: c, kind: 'nft', id: e.tokenId, cp, spam: false}); continue; }
+    if (ev === 'TRANSFER_NFT') { const m = await vcToken(c); b.legs.push({dir, amount: 1, sym: m.sym, name: m.name || m.sym, token: c, kind: 'NFT', id: e.tokenId, cp, spam: false, fromZero: inn && /^0x0{40}$/.test(String(e.from || ''))}); continue; }
     if (ev === 'TRANSFER_FT') { const m = await vcToken(c); const v = units(String(e.value || 0), m.dec); if (v) b.legs.push({dir, amount: v, sym: m.sym, name: m.name || m.sym, token: c, kind: 'token', id: null, cp, spam: false}); }
   }
   // Fees this address paid for transactions sent by another address (fee delegation, e.g. a VeWorld smart account): read the receipt
@@ -723,6 +723,15 @@ async function fetchKaspa(chain, addr, opt) {
     return {hash: t.transaction_id, ts: new Date(+t.block_time), fee: ins.length ? +fee.toFixed(8) : 0, ins, outs};
   });
   const buckets = utxoBuckets(chain, txs, new Set([addr]), addr);
+  const names = await kasNames();
+  for (const b of buckets) {
+    const t = txs.find(x => x.hash === b.hash); if (!t) continue;
+    for (const l of b.legs) {
+      const side = l.dir === 'in' ? t.ins : t.outs;
+      const hit = names[l.cp] ? l.cp : side.map(x => x.addr).find(a => a !== addr && names[a]);
+      if (hit) labelLeg(l, names[hit]);
+    }
+  }
   // Mining rewards arrive as coinbase transactions (no inputs)
   for (const b of buckets) { const t = txs.find(x => x.hash === b.hash); if (t && !t.ins.length && b.legs.length) { b.method = 'mining reward'; b.preRows = [{type: 'Mining', cat: 'Mining Reward', buy: b.legs[0], sell: null, lp: '', comment: `Kaspa block reward (coinbase) of ${b.legs[0].amount} KAS.`}]; b.legs = []; } }
   return trimToCutoff(buckets, cutoff);
@@ -1091,14 +1100,14 @@ async function fetchTon(chain, addr, opt) {
     for (const a of e.actions || []) {
       const x = a[a.type] || {};
       if (a.type === 'TonTransfer') {
-        if (me(x.sender) && !me(x.recipient)) { b.legs.push(natLeg(chain, 'out', x.amount / 1e9, x.recipient?.address)); b.to = x.recipient?.address || ''; b.toName = x.recipient?.name || ''; b.method = 'transfer'; }
-        if (me(x.recipient) && !me(x.sender)) { b.legs.push(natLeg(chain, 'in', x.amount / 1e9, x.sender?.address)); if (!b.from) b.from = x.sender?.address || ''; b.method = b.method || 'transfer'; }
+        if (me(x.sender) && !me(x.recipient)) { b.legs.push(natLeg(chain, 'out', x.amount / 1e9, x.recipient?.address)); labelLeg(b.legs[b.legs.length - 1], x.recipient?.name); b.to = x.recipient?.address || ''; b.toName = x.recipient?.name || ''; b.method = 'transfer'; }
+        if (me(x.recipient) && !me(x.sender)) { b.legs.push(natLeg(chain, 'in', x.amount / 1e9, x.sender?.address)); labelLeg(b.legs[b.legs.length - 1], x.sender?.name); if (!b.from) b.from = x.sender?.address || ''; b.method = b.method || 'transfer'; }
         if (x.sender?.is_scam && me(x.recipient)) b.flags.push('sender flagged as scam by tonapi');
         if (me(x.recipient) && !me(x.sender) && x.amount < 1e7 && x.comment) b.possibleSpam = `tiny ${fmtNum(x.amount / 1e9)} TON transfer carrying a text message ("${String(x.comment).slice(0, 40)}") — typical TON ad/spam`;
       } else if (a.type === 'JettonTransfer') {
         const l = jet(x.jetton, x.amount);
-        if (me(x.sender) && !me(x.recipient)) b.legs.push({...l, dir: 'out', cp: x.recipient?.address || ''});
-        if (me(x.recipient) && !me(x.sender)) b.legs.push({...l, dir: 'in', cp: x.sender?.address || ''});
+        if (me(x.sender) && !me(x.recipient)) { b.legs.push({...l, dir: 'out', cp: x.recipient?.address || ''}); labelLeg(b.legs[b.legs.length - 1], x.recipient?.name); }
+        if (me(x.recipient) && !me(x.sender)) { b.legs.push({...l, dir: 'in', cp: x.sender?.address || ''}); labelLeg(b.legs[b.legs.length - 1], x.sender?.name); }
         b.method = b.method || 'transfer';
       } else if (a.type === 'JettonSwap') {
         if (me(x.user_wallet)) {
@@ -1182,7 +1191,7 @@ async function fetchXrp(chain, addr, opt) {
   }
   const names = await xrpNames();
   for (const b of map.values()) {
-    b.legs.forEach(l => { if (names[l.cp]) l.cpName = names[l.cp]; });
+    b.legs.forEach(l => labelLeg(l, names[l.cp]));
     const n = names[b.to] || names[b.from]; if (n && !b.toName) b.toName = n;
     b.desc = 'Bithomp: https://bithomp.com/explorer/' + b.hash;
   }
@@ -1332,7 +1341,7 @@ async function fetchStellar(chain, addr, opt) {
   // Name known accounts and flag malicious ones (StellarExpert directory)
   const dir = await sxDirectory([...map.values()].flatMap(b => [b.from, b.to, ...b.legs.map(l => l.cp)]));
   for (const b of map.values()) {
-    for (const l of b.legs) { const d = dir[l.cp]; if (d) { l.cpName = d.name; if ((d.tags || []).some(t => /malicious|unsafe|scam|phishing/.test(t))) { l.spam = true; b.flags.push(`StellarExpert tags ${d.name || short(l.cp)} as ${d.tags.join('/')}`); } } }
+    for (const l of b.legs) { const d = dir[l.cp]; if (d) { labelLeg(l, d.name, d.tags); if ((d.tags || []).some(t => /malicious|unsafe|scam|phishing/.test(t))) { l.spam = true; b.flags.push(`StellarExpert tags ${d.name || short(l.cp)} as ${d.tags.join('/')}`); } } }
     const d = dir[b.to !== addr ? b.to : ''] || dir[b.from !== addr ? b.from : '']; if (d && !b.toName) b.toName = d.name + (d.tags?.length ? ` (${d.tags.join(', ')})` : '');
   }
   return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
@@ -2205,6 +2214,34 @@ async function fetchTao(chain, addr, opt) {
   if (taoStaked > EPS || Object.values(alphaHeld).some(v => v > EPS)) log(`   ℹ Still staked at the end of the period: ${fmtNum(taoStaked)} TAO${Object.entries(alphaHeld).filter(([, v]) => v > EPS).map(([n, v]) => `, ${fmtNum(v)} SN${n}-α`).join('')} (not counted as rewards until unstaked)`);
   return trimToCutoff([...map.values()].filter(b => b.ts), cutoff);
 }
+
+/* ---------- Exchange names for non-EVM counterparties ----------
+   cexOf(name, tags) → {name, instant} when an explorer's label names a centralised exchange or instant-swap service.
+   Used for XRP (XRPScan), Stellar (StellarExpert), TON (tonapi) and Kaspa (api.kaspa.org). */
+const CEX_NAMES = [[/binance/i, 'Binance'], [/coinbase/i, 'Coinbase'], [/kraken/i, 'Kraken'], [/kucoin/i, 'KuCoin'], [/bitstamp/i, 'Bitstamp'], [/bitfinex/i, 'Bitfinex'],
+  [/bybit/i, 'Bybit'], [/\bokx\b|okex/i, 'OKX'], [/huobi|\bhtx\b/i, 'HTX (Huobi)'], [/gate\.?io/i, 'Gate.io'], [/\bmexc\b/i, 'MEXC'], [/bitget/i, 'Bitget'],
+  [/crypto\.?com|cryptocom/i, 'Crypto.com'], [/gemini/i, 'Gemini'], [/bittrex/i, 'Bittrex'], [/poloniex/i, 'Poloniex'], [/upbit/i, 'Upbit'], [/bithumb/i, 'Bithumb'],
+  [/bitvavo/i, 'Bitvavo'], [/bitpanda/i, 'Bitpanda'], [/uphold/i, 'Uphold'], [/bitso\b/i, 'Bitso'], [/bitrue/i, 'Bitrue'], [/coinone/i, 'Coinone'], [/korbit/i, 'Korbit'],
+  [/coincheck/i, 'Coincheck'], [/bitflyer/i, 'bitFlyer'], [/blockchain\.com/i, 'Blockchain.com'], [/\bluno\b/i, 'Luno'], [/wazirx/i, 'WazirX'], [/coinspot/i, 'CoinSpot'],
+  [/independent reserve/i, 'Independent Reserve'], [/btc ?markets/i, 'BTC Markets'], [/swyftx/i, 'Swyftx'], [/coinjar/i, 'CoinJar'], [/bitbank/i, 'bitbank'], [/lbank/i, 'LBank'],
+  [/hitbtc/i, 'HitBTC'], [/probit/i, 'ProBit'], [/whitebit/i, 'WhiteBIT'], [/\bexmo\b/i, 'EXMO'], [/cex\.io/i, 'CEX.IO'], [/bitmart/i, 'BitMart'], [/digifinex/i, 'DigiFinex'],
+  [/ascendex|bitmax/i, 'AscendEX'], [/\bxt\.com\b/i, 'XT.com'], [/phemex/i, 'Phemex'], [/coinex\b/i, 'CoinEx'], [/bingx/i, 'BingX'], [/bitkub/i, 'Bitkub'], [/indodax/i, 'Indodax'],
+  [/coins\.ph/i, 'Coins.ph'], [/robinhood/i, 'Robinhood'], [/revolut/i, 'Revolut'], [/\bftx\b/i, 'FTX'], [/btcturk/i, 'BtcTurk'], [/paribu/i, 'Paribu'], [/bitbns/i, 'Bitbns'],
+  [/coindcx/i, 'CoinDCX'], [/zebpay/i, 'ZebPay'], [/bitopro/i, 'BitoPro'], [/max ?exchange|maicoin/i, 'MAX'], [/bitlo\b/i, 'Bitlo'], [/\bnexo\b/i, 'Nexo'], [/kriptomat/i, 'Kriptomat']];
+const NOT_CEX_RX = /\bpool\b|bridge|commerce|launchpad|staking|validator|smart chain|\bdex\b|foundation|treasury|airdrop|scam|phish|hack|exploit/i;
+function cexOf(name, tags) {
+  name = String(name || '').trim(); if (!name) return null;
+  tags = (tags || []).map(t => String(t).toLowerCase());
+  if (tags.some(t => /malicious|unsafe|scam|phishing/.test(t))) return null;
+  if (INSTANT_RX.test(name)) return {name: name.replace(/\s+(deposits?|withdrawals?|hot ?wallet|\d+)$/i, '').trim(), instant: true};
+  if (NOT_CEX_RX.test(name)) return null;
+  for (const [rx, n] of CEX_NAMES) if (rx.test(name)) return {name: n};
+  if (tags.includes('exchange') && !tags.includes('defi') && !tags.includes('anchor')) return {name: name.replace(/\s+(deposits?|desposits|withdrawals?|cold ?storage|hot ?wallet|\d+)$/i, '').trim()};
+  return null;
+}
+const labelLeg = (l, name, tags) => { if (!name) return; l.cpName = l.cpName || name; const ex = cexOf(name, tags); if (ex) l.cpEx = {...ex, full: name}; };
+let KAS_NAMES = null;
+const kasNames = () => KAS_NAMES || (KAS_NAMES = getJSON('https://api.kaspa.org/addresses/names').then(l => Object.fromEntries((l || []).map(n => [n.address, n.name]))).catch(() => ({})));
 
 /* ---------- XRP names (XRPScan well-known accounts) ---------- */
 let XRP_NAMES = null;
