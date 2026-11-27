@@ -166,7 +166,8 @@
 .txv-pill.fee{background:var(--chip);color:var(--mute)}
 .txv-legend{display:inline-flex;gap:12px;margin-left:10px;text-transform:none;letter-spacing:0;font-weight:400}
 .txv tr.spam td.rx,.txv tr.spam td.tx{opacity:.6}
-.txv td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;user-select:all}
+.txv td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;cursor:copy}
+.txv td.mono:hover{background:var(--hover);outline:1px dashed var(--acc);outline-offset:-2px}
 .txv tr.band td{background:var(--chip,#eef1f5)}
 .txv-badge{font-family:system-ui,sans-serif;font-size:11px;font-weight:700;color:var(--accInk,#fff);background:var(--acc,#2f5bd3);border-radius:10px;padding:0 6px;margin-left:4px;user-select:none}
 .txv button.sec.on{background:var(--acc,#2f5bd3);color:var(--accInk,#fff)}
@@ -311,7 +312,7 @@
         }
         if (c === 'Explorer Link') return `<td>${v ? `<a href="${esc(v)}" target="_blank" rel="noopener">open</a>` : ''}</td>`;
         if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') {
-          return `<td class="mono">${hl(v, words)}${c === 'Transaction Hash' && dupOnly && v ? ` <span class="txv-badge">×${hashN[String(v).trim().toLowerCase()]}</span>` : ''}</td>`;
+          return `<td class="mono" data-copy="${esc(v)}" title="Click to copy">${hl(v, words)}${c === 'Transaction Hash' && dupOnly && v ? ` <span class="txv-badge">×${hashN[String(v).trim().toLowerCase()]}</span>` : ''}</td>`;
         }
         if (typeof v === 'number') return `<td class="num">${fmtNum(v)}</td>`;
         return c === 'Comments' ? `<td class="cm" title="${esc(v)}">${hl(v, words)}</td>` : `<td>${hl(v, words)}</td>`;
@@ -388,6 +389,28 @@
     sync();
   }
   window.mountThemeSwitch = mountThemeSwitch;
+
+  // Click a hash / address cell → copy exactly that one value (plain text, so Excel pastes one cell).
+  function copyValue(text, near) {
+    text = String(text || '').trim(); if (!text) return;
+    const done = ok => {
+      let t = document.getElementById('cls-copied');
+      if (!t) { t = document.createElement('div'); t.id = 'cls-copied'; t.setAttribute('role', 'status'); t.style.cssText = 'position:fixed;z-index:2000;padding:6px 10px;border-radius:7px;font:600 12px system-ui,sans-serif;background:#17202b;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;transition:opacity .2s'; document.body.appendChild(t); }
+      t.textContent = ok ? 'Copied: ' + (text.length > 22 ? text.slice(0, 10) + '…' + text.slice(-8) : text) : 'Press Cmd/Ctrl+C to copy';
+      const r = near?.getBoundingClientRect?.() || {left: innerWidth / 2, top: 20, bottom: 40};
+      t.style.left = Math.max(8, Math.min(r.left, innerWidth - 260)) + 'px'; t.style.top = (r.bottom + 6 > innerHeight - 40 ? r.top - 34 : r.bottom + 6) + 'px'; t.style.opacity = '1';
+      clearTimeout(t._h); t._h = setTimeout(() => { t.style.opacity = '0'; }, 1400);
+    };
+    const fallback = () => { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch {} ta.remove(); done(ok); };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => done(true), fallback); else fallback();
+  }
+  // one delegated handler for every table with data-copy cells (viewer + classifier results)
+  document.addEventListener('click', e => {
+    const td = e.target.closest('td[data-copy]'); if (!td) return;
+    const sel = getSelection(); if (sel && !sel.isCollapsed && sel.toString().trim()) return; // user is selecting text on purpose
+    copyValue(td.dataset.copy, td);
+  });
+  window.copyValue = copyValue;
   window.openTxViewer = openTxViewer;
   window.downloadClassifierRows = download;
 })();

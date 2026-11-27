@@ -10,7 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="classifier-chains.js?v=77"></script>
 <script src="excel-export.js?v=1"></script>
-<script src="tx-viewer.js?v=13"></script>
+<script src="tx-viewer.js?v=14"></script>
 <style>
 :root{--bg:#eef2f7;--view:#1f2a44;--viewInk:#fff;--xl:#1e7145;--xlInk:#fff;--danger:#c0262d;--dangerBg:#fdecec;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#e8edf4;color-scheme:light}
 :root[data-theme="dark"]{--bg:#121417;--view:#d6deee;--viewInk:#111827;--xl:#4ac08a;--xlInk:#0c0e10;--danger:#ff7b72;--dangerBg:rgba(255,123,114,.14);--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
@@ -87,7 +87,8 @@ th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertic
 th{position:sticky;top:0;background:var(--card);z-index:1}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 td.cm{max-width:420px}
-td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;white-space:nowrap;user-select:all}
+td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;white-space:nowrap;cursor:copy}
+td.mono:hover{outline:1px dashed var(--acc);outline-offset:-2px}
 tr.spam td{color:var(--mute)}
 a{color:var(--acc)}
 .group{margin:10px 0 4px;font-size:12px;font-weight:700;color:var(--mute);text-transform:uppercase;letter-spacing:.04em;display:flex;gap:10px;align-items:center}
@@ -1235,7 +1236,7 @@ function render() {
   $('tbody').innerHTML = show.map(r => `<tr class="${r.Category === 'Scam/Spam' || r._internal ? 'spam' : ''}">` + COLS.map(c => {
     const v = r[c];
     if (c === 'Explorer Link') return `<td><a href="${esc(v)}" target="_blank" rel="noopener">open</a></td>`;
-    if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') return `<td class="mono">${esc(v)}</td>`;
+    if (c === 'Transaction Hash' || c === 'Liquidity Pool Address' || c === 'Wallet Address') return `<td class="mono" data-copy="${esc(v)}" title="Click to copy">${esc(v)}</td>`;
     if (typeof v === 'number') return `<td class="num">${fmtNum(v)}</td>`;
     return `<td class="${c === 'Comments' ? 'cm' : ''}">${esc(v)}</td>`;
   }).join('') + '</tr>').join('');
@@ -1371,6 +1372,31 @@ function saveKeys() {
   $('stop').onclick = () => { STOP = true; };
   $('xlsx').onclick = exportXlsx;
   $('view').onclick = viewTransactions;
+  // Paste from Excel / Google Sheets: keep only the rows you could see. Hidden or filtered-out rows between the
+  // copied cells are marked in the clipboard's table (display:none / height 0) and are skipped; extra columns
+  // (names, notes) are dropped when a row also has an address-looking cell.
+  $('addrs').addEventListener('paste', e => {
+    const html = e.clipboardData?.getData('text/html') || '';
+    if (!/<table/i.test(html)) return; // plain text: normal paste
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const hiddenRow = tr => /display\s*:\s*none|visibility\s*:\s*hidden/i.test(tr.getAttribute('style') || '') || tr.hidden || tr.getAttribute('height') === '0' || /(^|;)\s*height\s*:\s*0(pt|px)?\s*(;|$)/i.test(tr.getAttribute('style') || '');
+    const looksAddr = v => (/^\S{20,}$/.test(v) && /\d/.test(v)) || /^0\.0\.\d+$/.test(v);
+    let skipped = 0; const out = [];
+    for (const tr of doc.querySelectorAll('tr')) {
+      if (hiddenRow(tr)) { skipped++; continue; }
+      const cells = [...tr.querySelectorAll('td,th')].filter(td => !/display\s*:\s*none/i.test(td.getAttribute('style') || '')).map(td => td.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean);
+      if (!cells.length) continue;
+      const addrs = cells.length > 1 ? cells.filter(looksAddr) : cells;
+      out.push(...(addrs.length ? addrs : cells.slice(0, 1)));
+    }
+    if (!out.length) return;
+    e.preventDefault();
+    const ta = $('addrs'), st = ta.selectionStart, en = ta.selectionEnd, before = ta.value.slice(0, st), after = ta.value.slice(en);
+    const ins = (before && !before.endsWith('\n') ? '\n' : '') + out.join('\n') + (after && !after.startsWith('\n') ? '\n' : '');
+    ta.value = before + ins + after; ta.selectionStart = ta.selectionEnd = (before + ins).length;
+    ta.dispatchEvent(new Event('input', {bubbles: true}));
+    log(`Pasted ${out.length} address${out.length === 1 ? '' : 'es'} from the spreadsheet${skipped ? ` (skipped ${skipped} hidden/filtered row${skipped === 1 ? '' : 's'})` : ''}.`, 'g');
+  });
   $('refresh').onclick = refreshData;
   $('clearSaved').onclick = askClear;
   const inWebApp = window.parent !== window;
