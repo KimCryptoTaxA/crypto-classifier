@@ -9,8 +9,8 @@
 <script src="webapp-bridge.js?v=3"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="classifier-chains.js?v=77"></script>
-<script src="excel-export.js?v=1"></script>
-<script src="tx-viewer.js?v=14"></script>
+<script src="excel-export.js?v=2"></script>
+<script src="tx-viewer.js?v=17"></script>
 <style>
 :root{--bg:#eef2f7;--view:#1f2a44;--viewInk:#fff;--xl:#1e7145;--xlInk:#fff;--danger:#c0262d;--dangerBg:#fdecec;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--warn:#b4561b;--bad:#b42318;--ok:#18794e;--chip:#e8edf4;color-scheme:light}
 :root[data-theme="dark"]{--bg:#121417;--view:#d6deee;--viewInk:#111827;--xl:#4ac08a;--xlInk:#0c0e10;--danger:#ff7b72;--dangerBg:rgba(255,123,114,.14);--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
@@ -243,7 +243,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
   <button id="run" disabled>② Fetch &amp; classify ticked</button>
   <button id="stop" class="sec" disabled>Stop</button>
   <button id="refresh" class="sec" title="Scan and fetch the same wallet addresses again">↻ Refresh data</button>
-  <button id="view" class="view" disabled>View transactions</button>
+  <button id="view" class="view" title="Search the fetched transactions, or upload an Excel file from a previous fetch">View transactions</button>
   <button id="xlsx" class="excel" disabled>⬇ Download Excel (.xlsx)</button>
   <button id="clearSaved" class="danger" title="Forget the saved wallet addresses and last results in this browser">Clear saved data</button>
 </div>
@@ -1048,7 +1048,7 @@ async function run() {
   if (!SCAN.length) { await scan(); if (!SCAN.length) return; }
   const opt = getOpt(); saveKeys(); await helperUp();
   $('log').textContent = 'Fetching…';
-  STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false; $('xlsx').disabled = true; $('view').disabled = true;
+  STOP = false; $('scan').disabled = true; $('run').disabled = true; $('stop').disabled = false; $('xlsx').disabled = true;
   RESULT = []; WALLETS = [];
   const utc = $('utc').checked;
   const ownAddrs = new Map(), usedNames = new Set();
@@ -1107,7 +1107,7 @@ async function run() {
     await enrich(opt);
     log('Done.', 'g');
   } catch (e) { log(e.message === 'Stopped' ? 'Stopped — showing what was fetched so far.' : 'Error: ' + e.message, e.message === 'Stopped' ? 'w' : 'e'); }
-  $('scan').disabled = false; $('run').disabled = false; $('stop').disabled = true; $('xlsx').disabled = !RESULT.length; $('view').disabled = !RESULT.length;
+  $('scan').disabled = false; $('run').disabled = false; $('stop').disabled = true; $('xlsx').disabled = !RESULT.length;
   render();
   RESTORED = null; saveLast();
 }
@@ -1268,6 +1268,7 @@ async function exportXlsx() {
 function viewTransactions() {
   if (!window.openTxViewer) { log('The search window did not load — reload the page.', 'e'); return; }
   const rows = excelRows();
+  if (!rows.length) { openTxViewer({rows: [], cols: COLS}); return; }
   const old = restoredNote();
   openTxViewer({rows, cols: COLS, wallets: excelWallets(), title: `${old ? 'Saved results from ' + old + ' — ' : 'Transactions — '}${rows.length.toLocaleString()} rows from ${WALLETS.filter(w => w.wallet !== '—').length} wallet/chain pairs`});
 }
@@ -1324,7 +1325,7 @@ async function restoreLast() {
   RESULT = d.result; WALLETS = d.wallets || []; SCAN = unpackScan(d.scan); RESTORED = {savedAt: d.savedAt, addrs: d.addrs};
   if (!$('addrs').value.trim()) $('addrs').value = d.addrs || '';
   renderScan(); render();
-  $('run').disabled = !SCAN.some(e => e.items.some(x => x.sel)); $('xlsx').disabled = false; $('view').disabled = false;
+  $('run').disabled = !SCAN.some(e => e.items.some(x => x.sel)); $('xlsx').disabled = false;
   const n = WALLETS.filter(w => w.wallet !== '—').length;
   $('log').textContent = '';
   log(`Restored your last results: ${RESULT.length.toLocaleString()} rows from ${n} wallet/chain pair(s), fetched ${fmtSaved(d.savedAt)}.`, 'g');

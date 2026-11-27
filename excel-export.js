@@ -33,7 +33,11 @@
     /* ---- Transactions (CoinTracking import sheet: same columns, same order) ---- */
     const tx = wb.addWorksheet('Transactions', {views: [{state: 'frozen', ySplit: 1}]});
     tx.columns = COLS.map(c => ({header: c, key: c, width: {Comments: 90, 'Transaction Hash': 68, 'Liquidity Pool Address': 44, 'Wallet Address': 44, 'Explorer Link': 50, Date: 20, Category: 26, Type: 14}[c] || 15}));
-    rows.forEach(r => tx.addRow(COLS.map(c => r[c] ?? '')));
+    // Date: a real Excel date (shown as MM-DD-YYYY HH:MM:SS) so Excel's filter groups by year / month / day.
+    // Built with Date.UTC from the text, because ExcelJS stores dates as UTC: the cell shows exactly the same time.
+    const toXlDate = v => { const m = /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(v || '').trim()); return m ? new Date(Date.UTC(+m[3], +m[1] - 1, +m[2], +m[4], +m[5], +m[6])) : v; };
+    rows.forEach(r => tx.addRow(COLS.map(c => c === 'Date' ? toXlDate(r[c] ?? '') : (r[c] ?? ''))));
+    if (COLS.includes('Date')) tx.getColumn(COLS.indexOf('Date') + 1).numFmt = 'mm-dd-yyyy hh:mm:ss';
     tx.getRow(1).eachCell(headStyle);
     tx.autoFilter = {from: 'A1', to: `${colLetter(COLS.length)}1`};
     const catCol = COLS.indexOf('Category') + 1;

@@ -7,8 +7,8 @@
 <script>try{document.documentElement.dataset.theme=localStorage.getItem("cls_theme")||"light"}catch(e){document.documentElement.dataset.theme="light"}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
-<script src="excel-export.js?v=1"></script>
-<script src="tx-viewer.js?v=14"></script>
+<script src="excel-export.js?v=2"></script>
+<script src="tx-viewer.js?v=17"></script>
 <style>
 :root{--bg:#eef2f7;--card:#fff;--ink:#17202b;--mute:#566170;--line:#d6dde6;--acc:#2f5bd3;--accInk:#fff;--bad:#b42318;--chip:#e8edf4;color-scheme:light}
 :root[data-theme="dark"]{--bg:#121417;--card:#1b1e22;--ink:#e7e9ec;--mute:#9aa3ad;--line:#2d3238;--acc:#6f93ff;--accInk:#0c0e10;--warn:#f0a35e;--bad:#ff7b72;--ok:#4ac08a;--chip:#252a30;color-scheme:dark}
@@ -63,6 +63,7 @@ async function openFile(f) {
     const name = wb.SheetNames.find(n => /^transactions$/i.test(n)) || wb.SheetNames[0];
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {defval: ''});
     if (!rows.length) return say('No rows found in the "' + name + '" sheet.', true);
+    if (window.fixClassifierDates) fixClassifierDates(rows);
     const cols = COLS.every(c => c in rows[0]) ? COLS : Object.keys(rows[0]);
     const wsName = wb.SheetNames.find(n => /^wallets$/i.test(n));
     const wallets = wsName ? XLSX.utils.sheet_to_json(wb.Sheets[wsName], {defval: ''}).map(w => ({wallet: w['Exchange/Wallet Name'], chain: w.Chain, addr: w['Wallet Address'], rows: w.Rows, note: w.Notes})) : [];

@@ -153,6 +153,12 @@
 .txv-mat td.spam{color:var(--bad,#b42318);font-weight:700}
 .txv-mat tr.tot td{font-weight:700;border-top:2px solid var(--acc,#2f5bd3)}
 .txv-tbl{max-height:none}
+.txv-empty-wrap{max-width:640px;margin:6vh auto;display:flex;flex-direction:column;gap:12px;text-align:center}
+.txv-drop{border:2px dashed var(--line);border-radius:14px;background:var(--bg);padding:48px 20px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;color:var(--acc);transition:border-color .15s,background .15s}
+.txv-drop:hover,.txv-drop.over,.txv-drop:focus-visible{border-color:var(--acc);outline:none;background:var(--hover)}
+.txv-drop b{color:var(--ink);font-size:17px}
+.txv-drop span{color:var(--mute)}
+.txv-upmsg.bad{color:var(--bad)}
 .txv td.rx{color:var(--rx);font-weight:600}
 .txv td.tx{color:var(--tx);font-weight:600}
 .txv tr.k-rx td:first-child{box-shadow:inset 3px 0 0 var(--rx)}
@@ -207,9 +213,85 @@
     alert('The Excel library did not load (offline?). Reload the page when online and try again.');
   }
 
+  const CT_COLS = ['Type', 'Category', 'Buy Amount', 'Buy Currency', 'Sell Amount', 'Sell Currency', 'Fee Amount', 'Fee Currency',
+    'Exchange/Wallet Name', 'Comments', 'Date', 'Liquidity Pool Address', 'Transaction Hash', 'Chain', 'Wallet Address', 'Explorer Link'];
+  // Excel date cells come back as serial numbers (days since 1899-12-30): turn them back into MM-DD-YYYY HH:MM:SS
+  function fixDates(rows) {
+    const p = n => String(n).padStart(2, '0');
+    rows.forEach(r => { const v = r.Date; if (typeof v === 'number' && v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400) * 1000); r.Date = `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}-${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`; } });
+    return rows;
+  }
+  // Read an Excel file the classifier downloaded earlier (Transactions sheet + Wallets sheet). Read in the browser only.
+  async function readClassifierExcel(file) {
+    if (typeof XLSX === 'undefined') throw new Error('the Excel reader did not load (offline?) — reload the page when online');
+    const wb = XLSX.read(await file.arrayBuffer(), {type: 'array'});
+    const name = wb.SheetNames.find(n => /^transactions$/i.test(n)) || wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], {defval: ''});
+    if (!rows.length) throw new Error(`no rows found in the "${name}" sheet`);
+    fixDates(rows);
+    const cols = CT_COLS.every(c => c in rows[0]) ? CT_COLS : Object.keys(rows[0]);
+    const ws = wb.SheetNames.find(n => /^wallets$/i.test(n));
+    const wallets = ws ? XLSX.utils.sheet_to_json(wb.Sheets[ws], {defval: ''}).map(w => ({wallet: w['Exchange/Wallet Name'], chain: w.Chain, addr: w['Wallet Address'], rows: w.Rows, note: w.Notes})) : [];
+    return {rows, cols, wallets};
+  }
+  // Wire an "Upload previous data" button (+ optional drop area) inside the window
+  function wireUpload(root, closable, dropEl) {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls'; inp.hidden = true; root.appendChild(inp);
+    const msg = root.querySelector('.txv-upmsg');
+    const load = async f => {
+      if (!f) return; if (msg) { msg.textContent = 'Reading ' + f.name + '…'; msg.classList.remove('bad'); }
+      try { const d = await readClassifierExcel(f); openTxViewer({...d, title: `${f.name} — ${d.rows.length.toLocaleString()} rows`, closable}); }
+      catch (e) { if (msg) { msg.textContent = `Could not read "${f.name}": ${e.message}`; msg.classList.add('bad'); } else alert(`Could not read "${f.name}": ${e.message}`); }
+    };
+    inp.onchange = () => { const f = inp.files[0]; inp.value = ''; load(f); };
+    root.querySelectorAll('[data-upload]').forEach(b => b.onclick = () => inp.click());
+    if (dropEl) {
+      ['dragenter', 'dragover'].forEach(t => dropEl.addEventListener(t, e => { e.preventDefault(); dropEl.classList.add('over'); }));
+      ['dragleave', 'drop'].forEach(t => dropEl.addEventListener(t, e => { e.preventDefault(); dropEl.classList.remove('over'); }));
+      dropEl.addEventListener('drop', e => load(e.dataTransfer.files[0]));
+      dropEl.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
+    }
+    return load;
+  }
+  function closeHandlers(back, closable) {
+    const close = () => { document.querySelector('.txv-pick')?.remove(); back.remove(); document.removeEventListener('keydown', onKey); document.body.style.overflow = ''; };
+    const onKey = e => { if (e.key === 'Escape' && !document.querySelector('.txv-pick') && closable && document.contains(back)) close(); };
+    if (closable) {
+      back.querySelector('.txv-x').onclick = close;
+      back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+      document.addEventListener('keydown', onKey);
+      document.body.style.overflow = 'hidden';
+    }
+    return close;
+  }
+  // Nothing fetched yet: the same window, with an upload area for a previous fetch's Excel file
+  function openEmpty({title = 'View transactions', closable = true, note = ''}) {
+    const back = document.createElement('div'); back.className = 'txv-back';
+    back.innerHTML = `<div class="txv" role="dialog" aria-modal="true" aria-labelledby="txv-title">
+  <div class="txv-head"><h2 id="txv-title">${esc(title)}</h2>
+    <div class="themesw txv-theme" role="group" aria-label="Colour theme"></div>
+    ${closable ? '<button class="txv-x" aria-label="Close" title="Close (Esc)">×</button>' : ''}</div>
+  <div class="txv-body" id="txv-body"><div class="txv-empty-wrap">
+    <div class="txv-drop" tabindex="0" role="button" data-upload aria-label="Upload an Excel file from a previous fetch">
+      <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path d="M12 15V4m0 0-4 4m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <b>Upload previous data</b>
+      <span>Drop an Excel file from a previous fetch here, or click to choose it.</span>
+    </div>
+    <p class="txv-upmsg txv-hint">${esc(note || 'No transactions fetched yet. Fetch wallets first, or upload an Excel file the classifier downloaded before.')}</p>
+    <p class="txv-hint">The file is read in this browser only. Nothing is uploaded to a server.</p>
+  </div></div></div>`;
+    document.body.appendChild(back);
+    const close = closeHandlers(back, closable);
+    if (window.mountThemeSwitch) mountThemeSwitch(back.querySelector('.txv-theme'));
+    wireUpload(back, closable, back.querySelector('.txv-drop'));
+    back.querySelector('.txv-drop').focus();
+    return {close, element: back};
+  }
+
   function openTxViewer({rows, cols, wallets = [], title = 'Transactions', closable = true, mount = null}) {
     injectCss();
-    document.querySelector('.txv-back')?.remove();
+    document.querySelector('.txv-back')?.remove(); document.body.style.overflow = '';
+    if (!rows || !rows.length) return openEmpty({closable});
     const G = GROUPS();
     // pre-compute search text, day and group once
     const data = rows.map(r => ({r, hay: SEARCH_COLS.map(c => r[c] ?? '').join(' ').toLowerCase(), day: isoKey(r.Date), h: String(r['Transaction Hash'] || '').trim().toLowerCase(), g: groupOf(r), ex: exchangeOf(r)}));
@@ -225,14 +307,14 @@
     const exNames = Object.keys(exCount).sort((a, b) => a.localeCompare(b)), exAll = {to: 0, from: 0}; exNames.forEach(n => { exAll.to += exCount[n].to; exAll.from += exCount[n].from; });
     const exLine = (val, label, n) => `<option value="${esc(val)}"${n ? '' : ' disabled'}>${esc(label)} (${n})</option>`;
     const exOpts = '<option value="">All rows</option>' + (exNames.length
-      ? `<optgroup label="Any exchange">${exLine('*|', 'To or from any exchange', exAll.to + exAll.from)}${exLine('*|to', 'Sent to any exchange', exAll.to)}${exLine('*|from', 'Received from any exchange', exAll.from)}</optgroup>` +
-        exNames.map(n => `<optgroup label="${esc(n)}">${exLine(n + '|', `${n}: to or from`, exCount[n].to + exCount[n].from)}${exLine(n + '|to', `Sent to ${n}`, exCount[n].to)}${exLine(n + '|from', `Received from ${n}`, exCount[n].from)}</optgroup>`).join('')
+      ? exLine('*|', 'Any exchange', exAll.to + exAll.from) + exNames.map(n => exLine(n + '|', n, exCount[n].to + exCount[n].from)).join('')
       : '<option value="" disabled>No exchange transfers found</option>');
     const opt = (arr, all) => `<option value="">${all}</option>` + arr.map(v => `<option>${esc(v)}</option>`).join('');
 
     const back = document.createElement('div'); back.className = 'txv-back';
     back.innerHTML = `<div class="txv" role="dialog" aria-modal="true" aria-labelledby="txv-title">
   <div class="txv-head"><h2 id="txv-title">${esc(title)}</h2>
+    <button class="sec" data-upload title="Open an Excel file from a previous fetch in this window (read in this browser only)">Upload previous data</button>
     <button class="sec" data-dl="all">Download all results (${rows.length.toLocaleString()})</button>
     <button data-dl="some">Download these results</button>
     <div class="themesw txv-theme" role="group" aria-label="Colour theme"></div>
@@ -364,14 +446,8 @@
       catch (e) { alert('Excel download failed: ' + e.message); }
       b.textContent = old; b.disabled = false; if (!all) update();
     });
-    const close = () => { document.querySelector('.txv-pick')?.remove(); back.remove(); document.removeEventListener('keydown', onKey); document.body.style.overflow = ''; };
-    const onKey = e => { if (e.key === 'Escape' && !document.querySelector('.txv-pick') && closable && document.contains(back)) close(); };
-    if (closable) {
-      back.querySelector('.txv-x').onclick = close;
-      back.addEventListener('mousedown', e => { if (e.target === back) close(); });
-      document.addEventListener('keydown', onKey);
-      document.body.style.overflow = 'hidden';
-    }
+    const close = closeHandlers(back, closable);
+    wireUpload(back, closable, null);
     if (window.mountThemeSwitch) mountThemeSwitch(back.querySelector('.txv-theme'));
     update(); F.q.focus();
     return {close, element: back};
@@ -412,5 +488,7 @@
   });
   window.copyValue = copyValue;
   window.openTxViewer = openTxViewer;
+  window.readClassifierExcel = readClassifierExcel;
+  window.fixClassifierDates = fixDates;
   window.downloadClassifierRows = download;
 })();
