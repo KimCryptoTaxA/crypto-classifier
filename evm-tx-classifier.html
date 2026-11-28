@@ -139,7 +139,7 @@ details.guide>summary:focus-visible{outline:2px solid var(--acc);outline-offset:
     <div>
       <h3>Steps</h3>
       <ol>
-        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, PulseChain, Sei, Monad), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains), <b>Blockberry</b> (Mina — also needs the local helper). Tick “Remember keys”. Never share your keys.</li>
+        <li><b>Add your API keys (one time)</b> in section 3. Most chains need no key. Free keys add more: <b>Moralis</b> (BNB Chain, Gnosis, Linea, Cronos, Ronin, Sei, Monad; also makes PulseChain faster), <b>Helius</b> (Solana), <b>CSPR.cloud</b> (Casper), <b>Subscan</b> (Astar, Moonbeam, Bifrost and other Substrate chains), <b>Blockberry</b> (Mina — also needs the local helper). Tick “Remember keys”. Never share your keys.</li>
         <li><b>Paste wallet addresses</b> in section 1, one per line, any chains mixed. Optional: From/To dates (e.g. one tax year).</li>
         <li><b>Click ① Scan.</b> Each address shows its chains: ✓ active, — none, ⚠ error, 🔑 needs a key. Untick what you don't want.</li>
         <li><b>Click ② Fetch &amp; classify ticked.</b> Big wallets take a few minutes. If the log says “Page limit reached”, raise <i>Max pages per list</i> or run one date range at a time.</li>
@@ -314,12 +314,13 @@ const CHAINS = [
   {id:'xdc',    name:'XDC Network',      code:'XDC',    native:'XDC',  src:'keyed', chainid:50,  debank:'xdc', explorer:'https://xdcscan.com', def:true, label:'needs free Etherscan key'},
   {id:'filevm', name:'Filecoin EVM',     code:'FILEVM', native:'FIL',  src:'blockscout', chainid:314,  url:'https://filecoin.blockscout.com', def:true},
   {id:'iotaevm',name:'IOTA EVM',         code:'IOTAEVM',native:'IOTA', src:'blockscout', chainid:8822, url:'https://explorer.evm.iota.org',   def:true},
+  {id:'pulse',  name:'PulseChain',       code:'PLS',    native:'PLS',  src:'blockscout', chainid:369, url:'https://api.scan.pulsechain.com', explorer:'https://scan.pulsechain.com', moralis:'pulse', def:true,
+   label:'PulseChain explorer · free, can be slow'},
   // Only available through Moralis (needs a Moralis API key)
   {id:'cronos', name:'Cronos',           code:'CRO',    native:'CRO',  src:'moralis', chainid:25,    moralis:'cronos',  explorer:'https://explorer.cronos.org', def:true},
   {id:'chiliz', name:'Chiliz',           code:'CHZ',    native:'CHZ',  src:'moralis', chainid:88888, moralis:'chiliz',  explorer:'https://chiliscan.com', def:true},
   {id:'flow',   name:'Flow EVM',         code:'FLOW',   native:'FLOW', src:'moralis', chainid:747,   moralis:'flow',    explorer:'https://evm.flowscan.io', def:true},
   {id:'ronin',  name:'Ronin',            code:'RON',    native:'RON',  src:'moralis', chainid:2020,  moralis:'ronin',   explorer:'https://app.roninchain.com', def:true},
-  {id:'pulse',  name:'PulseChain',       code:'PLS',    native:'PLS',  src:'moralis', chainid:369,   moralis:'pulse',   explorer:'https://scan.pulsechain.com', def:true},
   {id:'seievm', name:'Sei EVM',          code:'SEIEVM', native:'SEI',  src:'moralis', chainid:1329,  moralis:'sei',     explorer:'https://seitrace.com', def:true},
   {id:'monad',  name:'Monad',            code:'MON',    native:'MON',  src:'moralis', chainid:143,   moralis:'monad',   explorer:'https://monadscan.com', def:true},
 ].map(c => ({...c, moralis: c.moralis || MORALIS_IDS[c.id], family: 'evm', group: 'EVM chains', txUrl: c.txUrl || (h => (c.explorer || c.url) + '/tx/' + h)}));
